@@ -21,6 +21,7 @@ from .protocol import (
     EVENT_INPUT_PORT_OFFSET,
     EVENT_INPUT_TOPIC,
     EVENT_OUTPUT_PORT_OFFSET,
+    FrameId,
     RPC_PORT_OFFSET,
     STATUS_RPC,
     bind_endpoint,
@@ -69,11 +70,11 @@ class MagpieSessionHost:
             event_output_queue_size=self._event_output_queue_size,
         )
         self._runtime: SessionRuntime | None = None
-        self._client_gid: int | None = None
-        self._closing_client_gid: int | None = None
+        self._client_gid: FrameId | None = None
+        self._closing_client_gid: FrameId | None = None
         self._session_close_task: asyncio.Task[None] | None = None
-        self._pending_session_update: tuple[int, dict[str, Any]] | None = None
-        self._retired_client_gids: dict[int, None] = {}
+        self._pending_session_update: tuple[FrameId, dict[str, Any]] | None = None
+        self._retired_client_gids: dict[FrameId, None] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._stopped = asyncio.Event()
 
@@ -207,7 +208,7 @@ class MagpieSessionHost:
 
     async def _event_input_loop(self) -> None:
         while not self._stopped.is_set():
-            event_gid: int | None = None
+            event_gid: FrameId | None = None
             try:
                 result = await asyncio.to_thread(self._event_reader.read, 0.25)
             except TimeoutError:
@@ -295,7 +296,7 @@ class MagpieSessionHost:
                             ]
                         )
 
-    async def _ensure_session(self, client_gid: int) -> SessionRuntime:
+    async def _ensure_session(self, client_gid: FrameId) -> SessionRuntime:
         runtime = self._runtime
         if runtime is not None and runtime.active and self._client_gid == client_gid:
             return runtime
@@ -313,7 +314,7 @@ class MagpieSessionHost:
         Logger.info(f"MAGPIE client session opened: gid={client_gid}")
         return runtime
 
-    async def _drain_session(self, client_gid: int) -> None:
+    async def _drain_session(self, client_gid: FrameId) -> None:
         """Drain one accepted close without blocking duplicate acknowledgements."""
 
         this_task = asyncio.current_task()

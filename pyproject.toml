@@ -27,12 +27,6 @@ classifiers = [
 dependencies = [
     "luxai-magpie[discovery]>=0.9.6",
     "paramify>=0.2.0",
-]
-
-[project.optional-dependencies]
-# The protocol/configuration module stays lightweight for robot clients. The
-# server installs this extra to obtain the S2S model pipeline and backends.
-runtime = [
     "huggingface-hub>=0.34.0",
     "httpx>=0.28.0",
     "nltk==3.10.0",
@@ -54,6 +48,8 @@ runtime = [
     "librosa==0.11.0",
     "lingua-language-detector>=2.0.2",
 ]
+
+[project.optional-dependencies]
 qwen-ggml = [
     "faster-qwen3-tts[ggml]>=0.3.2; platform_system == 'Linux'",
 ]

@@ -28,6 +28,8 @@ PIPELINE_SAMPLE_RATE = 16_000
 PIPELINE_CHANNELS = 1
 PIPELINE_BIT_DEPTH = 16
 
+FrameId = str | int
+
 
 def service_port(base_port: int, offset: int) -> int:
     """Return and validate a port derived from the service base port."""
@@ -126,7 +128,7 @@ class S2SAudioFrame(AudioFrameRaw):
     provides the same correlation to event-only consumers.
     """
 
-    client_gid: int | None = None
+    client_gid: FrameId | None = None
     response_key: str = ""
     cancelled: bool = False
 
@@ -140,6 +142,7 @@ __all__ = [
     "EVENT_INPUT_TOPIC",
     "EVENT_OUTPUT_PORT_OFFSET",
     "EVENT_OUTPUT_TOPIC",
+    "FrameId",
     "PIPELINE_BIT_DEPTH",
     "PIPELINE_CHANNELS",
     "PIPELINE_SAMPLE_RATE",

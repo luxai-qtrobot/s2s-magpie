@@ -17,6 +17,7 @@ from .protocol import (
     PIPELINE_BIT_DEPTH,
     PIPELINE_CHANNELS,
     PIPELINE_SAMPLE_RATE,
+    FrameId,
     S2SAudioFrame,
 )
 
@@ -65,22 +66,22 @@ class MagpieSessionSink:
             bind=True,
             delivery="reliable",
         )
-        self._client_gid: int | None = None
+        self._client_gid: FrameId | None = None
         self._response_key: str | None = None
-        self._audio_gid: int | None = None
+        self._audio_gid: FrameId | None = None
         self._audio_frame_id = 0
         self._latest_response_key: str | None = None
-        self._latest_audio_gid: int | None = None
+        self._latest_audio_gid: FrameId | None = None
         self._latest_audio_frame_id = 0
         self._cancelled_response_keys: set[str] = set()
         self._shutdown = False
 
-    def open_session(self, client_gid: int) -> None:
+    def open_session(self, client_gid: FrameId) -> None:
         """Correlate every outgoing frame with the active MAGPIE client."""
 
         if self._shutdown:
             raise RuntimeError("MAGPIE S2S sink is shut down")
-        self._client_gid = int(client_gid)
+        self._client_gid = client_gid
 
     async def send_events(self, events: list[Any]) -> None:
         if self._shutdown:
@@ -96,25 +97,29 @@ class MagpieSessionSink:
                 self._event_topic,
             )
 
-    async def _send_session_lifecycle(self, client_gid: int, event_type: str) -> None:
+    async def _send_session_lifecycle(
+        self,
+        client_gid: FrameId,
+        event_type: str,
+    ) -> None:
         """Send a transport lifecycle event on an explicit client GID."""
 
         if self._shutdown:
             return
         self._event_writer.write(
             DictFrame(
-                gid=int(client_gid),
+                gid=client_gid,
                 value={"type": event_type},
             ).to_dict(),
             self._event_topic,
         )
 
-    async def send_session_closing(self, client_gid: int) -> None:
+    async def send_session_closing(self, client_gid: FrameId) -> None:
         """Acknowledge that the close request was accepted before draining."""
 
         await self._send_session_lifecycle(client_gid, "magpie.session.closing")
 
-    async def send_session_closed(self, client_gid: int) -> None:
+    async def send_session_closed(self, client_gid: FrameId) -> None:
         """Report that a session has fully drained on the requesting client GID."""
 
         await self._send_session_lifecycle(client_gid, "magpie.session.closed")

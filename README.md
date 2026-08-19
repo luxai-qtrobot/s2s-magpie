@@ -42,11 +42,12 @@ while retaining clear provenance for future upstream updates.
 
 ## Install
 
-Install the project in the same CUDA/Python environment used for S2S:
+Create or activate the Python environment for the service, install the
+Jetson-compatible Torch/Torchaudio build when required, then install the
+service itself:
 
 ```bash
-uv pip uninstall speech-to-speech  # if the upstream package is installed
-uv pip install -e ".[runtime]"
+uv pip install -e .
 ```
 
 This distribution contains its pinned, modified `speech_to_speech` core and
@@ -54,9 +55,8 @@ replaces the upstream distribution at runtime. Do not install both packages in
 the same environment; two distributions must not own that import namespace.
 
 FastAPI, Uvicorn, WebSocket, WebRTC, aiortc, and local PortAudio dependencies
-are not required by this runtime. Qwen3-TTS uses its Torch backend by default;
-install `.[runtime,qwen-ggml]` only when a compatible qwentts.cpp build is
-actually desired.
+are not required. Qwen3-TTS uses its Torch backend by default; install
+`.[qwen-ggml]` only when a compatible qwentts.cpp build is actually desired.
 
 ## Configuration and run
 
