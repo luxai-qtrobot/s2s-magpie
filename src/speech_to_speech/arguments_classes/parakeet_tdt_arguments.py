@@ -19,6 +19,20 @@ class ParakeetTDTSTTHandlerArguments:
             "for MPS or 'nvidia/parakeet-tdt-0.6b-v3' for CUDA/CPU."
         },
     )
+    parakeet_tdt_model_revision: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Immutable Hugging Face revision for nano-parakeet. The bundled model lock is used for the production model when unset."
+        },
+    )
+    parakeet_tdt_cache_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Optional Hugging Face cache directory containing the Parakeet checkpoint."},
+    )
+    parakeet_tdt_local_files_only: bool = field(
+        default=True,
+        metadata={"help": "Require nano-parakeet to use a pre-provisioned checkpoint. Default is True."},
+    )
     parakeet_tdt_device: str = field(
         default="auto",
         metadata={

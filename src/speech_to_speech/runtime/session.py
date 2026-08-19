@@ -270,6 +270,8 @@ class SessionRuntime:
         self._closed = False
         self._send_task: asyncio.Task[None] | None = None
         self._close_task: asyncio.Task[None] | None = None
+        self._closed_event = asyncio.Event()
+        self._delivery_failure: Exception | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -288,6 +290,58 @@ class SessionRuntime:
             and session.sink is self.sink
             and session.released_at is None
         )
+
+    @property
+    def terminal_error(self) -> Exception | None:
+        """Return the output-delivery failure that terminated this session."""
+
+        return self._delivery_failure
+
+    @property
+    def closed(self) -> bool:
+        """Whether cleanup has released all session-owned state."""
+
+        return self._closed
+
+    async def wait_closed(self) -> None:
+        """Wait until cleanup has released the pipeline unit and sink."""
+
+        await self._closed_event.wait()
+
+    def _ensure_close_task(self) -> asyncio.Task[None]:
+        task = self._close_task
+        if task is None:
+            task = asyncio.create_task(
+                self._close_impl(),
+                name=f"s2s-session-close-{self.unit.index}",
+            )
+            self._close_task = task
+        return task
+
+    def fail_delivery(self, exc: Exception) -> None:
+        """Make an output failure terminal and start session cleanup once."""
+
+        if self._closed or self._delivery_failure is not None:
+            return
+        self._delivery_failure = exc
+        task = self._ensure_close_task()
+
+        def report_background_close(done: asyncio.Task[None]) -> None:
+            if done.cancelled():
+                if self._close_task is done:
+                    self._close_task = None
+                Logger.error(f"Pipeline {self.unit.index}: terminal session cleanup was cancelled")
+                return
+            close_error = done.exception()
+            if close_error is not None:
+                if self._close_task is done:
+                    self._close_task = None
+                Logger.error(
+                    f"Pipeline {self.unit.index}: terminal session cleanup failed: "
+                    f"{type(close_error).__name__}: {close_error}"
+                )
+
+        task.add_done_callback(report_background_close)
 
     async def start(self) -> str:
         """Register the session, reset pipeline edges, and start output delivery."""
@@ -450,97 +504,162 @@ class SessionRuntime:
         the pipeline unit from premature reuse.
         """
 
-        if self._close_task is None:
-            self._close_task = asyncio.create_task(
-                self._close_impl(),
-                name=f"s2s-session-close-{self.unit.index}",
-            )
-        await asyncio.shield(self._close_task)
+        if self._closed:
+            return
+        close_task = self._ensure_close_task()
+        try:
+            await asyncio.shield(close_task)
+        except BaseException:
+            # A failed completed task must not poison every later close call.
+            # A caller cancellation leaves the shielded cleanup running.
+            if close_task.done() and self._close_task is close_task:
+                self._close_task = None
+            raise
 
     async def _close_impl(self) -> None:
         if self._closed:
+            self._closed_event.set()
             return
-        if not self._started:
-            self._closed = True
-            await self.sink.close()
-            return
-
         session = self.unit.session
-        if session is None or session.sink is not self.sink:
-            self._closed = True
-            await self.sink.close()
-            return
+        owns_session = self._started and session is not None and session.sink is self.sink
+        session_id = session.session_id if owns_session and session is not None else ""
+        failure: BaseException | None = None
 
-        session_id = session.session_id
-        session.released_at = time.monotonic()
+        def remember_failure(stage: str, exc: BaseException) -> None:
+            nonlocal failure
+            if failure is None:
+                failure = exc
+            Logger.error(
+                f"Pipeline {self.unit.index}: session cleanup {stage} failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
 
         try:
-            self.unit.service.close_pending_responses(session_id)
-        except KeyError:
-            pass
+            if owns_session and session is not None:
+                session.released_at = time.monotonic()
 
-        def account_usage(item: Any) -> None:
-            if not isinstance(item, TokenUsageEvent):
-                return
-            try:
-                self.unit.service.dispatch_pipeline_event(session_id, item)
-            except KeyError:
-                Logger.debug(f"Skipped late usage for unregistered session {session_id}")
-
-        if session.pending_output_item is not None:
-            account_usage(session.pending_output_item)
-            session.pending_output_item = None
-        for item in session.pending_text_output_items:
-            account_usage(item)
-        session.pending_text_output_items.clear()
-
-        _clean_unit(self.unit, on_discard=account_usage)
-        self.unit.input_queue.put(PipelineControlMessage(SESSION_END.kind, session_id=session_id))
-
-        warned = False
-        started_waiting = time.monotonic()
-        try:
-            while not session.drained.is_set() and not self.stop_event.is_set():
                 try:
-                    await asyncio.wait_for(session.drained.wait(), timeout=0.05)
-                except asyncio.TimeoutError:
+                    self.unit.service.close_pending_responses(session_id)
+                except KeyError:
                     pass
-                elapsed = time.monotonic() - started_waiting
-                if not warned and elapsed >= self.drain_warning_timeout_s:
-                    Logger.warning(
-                        f"Pipeline {self.unit.index}: SESSION_END not drained after "
-                        f"{elapsed:.1f}s; unit remains unavailable"
-                    )
-                    warned = True
-                if session.quarantined_at is None and elapsed >= self.quarantine_timeout_s:
-                    session.quarantined_at = time.monotonic()
-                    _safe_unregister(self.unit, session_id)
-                    Logger.error(
-                        f"Pipeline {self.unit.index}: SESSION_END still not drained after "
-                        f"{elapsed:.0f}s; quarantining until drain"
-                    )
+                except BaseException as exc:
+                    remember_failure("close_pending_responses", exc)
 
-            if self.stop_event.is_set() and not session.drained.is_set():
-                Logger.info(
-                    f"Pipeline {self.unit.index} stopped before SESSION_END drained "
-                    f"for session {session_id}"
-                )
+                def account_usage(item: Any) -> None:
+                    if not isinstance(item, TokenUsageEvent):
+                        return
+                    try:
+                        self.unit.service.dispatch_pipeline_event(session_id, item)
+                    except KeyError:
+                        Logger.debug(f"Skipped late usage for unregistered session {session_id}")
+                    except Exception as exc:
+                        remember_failure("usage accounting", exc)
+
+                try:
+                    if session.pending_output_item is not None:
+                        account_usage(session.pending_output_item)
+                    for item in session.pending_text_output_items:
+                        account_usage(item)
+                except BaseException as exc:
+                    remember_failure("pending output accounting", exc)
+                finally:
+                    session.pending_output_item = None
+                    session.pending_text_output_items.clear()
+
+                try:
+                    _clean_unit(self.unit, on_discard=account_usage)
+                except BaseException as exc:
+                    remember_failure("pipeline reset", exc)
+
+                drain_requested = False
+                try:
+                    self.unit.input_queue.put(PipelineControlMessage(SESSION_END.kind, session_id=session_id))
+                    drain_requested = True
+                except BaseException as exc:
+                    remember_failure("SESSION_END enqueue", exc)
+
+                warned = False
+                started_waiting = time.monotonic()
+                if drain_requested:
+                    while not session.drained.is_set() and not self.stop_event.is_set():
+                        try:
+                            await asyncio.wait_for(session.drained.wait(), timeout=0.05)
+                        except asyncio.TimeoutError:
+                            pass
+                        elapsed = time.monotonic() - started_waiting
+                        if not warned and elapsed >= self.drain_warning_timeout_s:
+                            Logger.warning(
+                                f"Pipeline {self.unit.index}: SESSION_END not drained after "
+                                f"{elapsed:.1f}s; unit remains unavailable"
+                            )
+                            warned = True
+                        if session.quarantined_at is None and elapsed >= self.quarantine_timeout_s:
+                            session.quarantined_at = time.monotonic()
+                            _safe_unregister(self.unit, session_id)
+                            Logger.error(
+                                f"Pipeline {self.unit.index}: SESSION_END still not drained after "
+                                f"{elapsed:.0f}s; quarantining until drain"
+                            )
+
+                    if self.stop_event.is_set() and not session.drained.is_set():
+                        Logger.info(
+                            f"Pipeline {self.unit.index} stopped before SESSION_END drained "
+                            f"for session {session_id}"
+                        )
+        except BaseException as exc:
+            remember_failure("drain", exc)
         finally:
-            _safe_unregister(self.unit, session_id)
-            if self.unit.session is session:
+            if session_id:
+                _safe_unregister(self.unit, session_id)
+            if owns_session and self.unit.session is session:
                 self.unit.session = None
 
             send_task = self._send_task
-            if send_task is not None and not send_task.done():
+            current_task = asyncio.current_task()
+            if send_task is not None and send_task is not current_task and not send_task.done():
                 send_task.cancel()
                 try:
                     await send_task
                 except asyncio.CancelledError:
                     pass
-            await self.sink.close()
-            self._closed = True
-            recovered = " after quarantine" if session.quarantined_at is not None else ""
-            Logger.info(f"Pipeline {self.unit.index} released{recovered} (session {session_id} ended)")
+                except BaseException as exc:
+                    remember_failure("output task", exc)
+            try:
+                await self.sink.close()
+            except BaseException as exc:
+                remember_failure("sink close", exc)
+            finally:
+                self._closed = True
+                self._closed_event.set()
+
+            if owns_session and session is not None:
+                recovered = " after quarantine" if session.quarantined_at is not None else ""
+                Logger.info(f"Pipeline {self.unit.index} released{recovered} (session {session_id} ended)")
+
+        if failure is not None:
+            raise failure
+
+    async def _drain_after_delivery_failure(self, session: SessionState) -> None:
+        """Discard output until SESSION_END without touching the failed sink."""
+
+        unit = self.unit
+        while unit.session is session and not self.stop_event.is_set():
+            _flush_queue(unit.text_output_queue)
+            try:
+                item = unit.output_queue.get_nowait()
+            except Empty:
+                await asyncio.sleep(0.01)
+                continue
+
+            if is_control_message(item, SESSION_END.kind):
+                item_session_id = getattr(item, "session_id", None)
+                if item_session_id in (None, session.session_id):
+                    session.drained.set()
+                    Logger.debug(f"Pipeline {unit.index}: failed session SESSION_END drained")
+                    return
+            if _is_pipeline_end(item):
+                session.drained.set()
+                return
 
     async def _send_loop(self) -> None:
         """Drain ordered pipeline output and deliver it through the sink."""
@@ -550,6 +669,10 @@ class SessionRuntime:
         while not self.stop_event.is_set():
             try:
                 session = unit.session
+                if self._delivery_failure is not None:
+                    if session is not None:
+                        await self._drain_after_delivery_failure(session)
+                    break
                 sink = session.sink if session is not None else None
                 session_id = session.session_id if session is not None else None
 
@@ -807,8 +930,14 @@ class SessionRuntime:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                Logger.error(f"Pipeline {unit.index} send loop error: {type(exc).__name__}: {exc}")
-                await asyncio.sleep(0.1)
+                Logger.error(
+                    f"Pipeline {unit.index} send loop terminal error: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                self.fail_delivery(exc)
+                # Let the close task reset the queues and enqueue SESSION_END;
+                # the next iteration switches to drain-only mode.
+                await asyncio.sleep(0)
 
 
 __all__ = [

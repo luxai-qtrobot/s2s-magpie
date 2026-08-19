@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
-from pathlib import Path
 from queue import Queue
 from sys import platform
 from threading import Event
 from typing import Any
 
-import nltk
 import torch
 from luxai.magpie.utils import Logger
 
@@ -27,6 +24,7 @@ from speech_to_speech.backend_registry import (
     HandlerContext,
     create_backend_handler,
 )
+from speech_to_speech.model_assets import require_nltk_assets
 from speech_to_speech.pipeline.cancel_scope import CancelScope
 from speech_to_speech.pipeline.queue_types import (
     AudioInItem,
@@ -38,26 +36,13 @@ from speech_to_speech.pipeline.queue_types import (
     TTSInItem,
     VADOutItem,
 )
+from speech_to_speech.pipeline.queues import AudioIngressQueue, BoundedPipelineQueue
 from speech_to_speech.pipeline.speculative_turns import SpeculativeTurnTracker
 from speech_to_speech.STT.transcription_notifier import TranscriptionNotifier
 from speech_to_speech.VAD.vad_handler import VADHandler
 
-# Ensure that the necessary NLTK resources are available
-try:
-    nltk.data.find("tokenizers/punkt_tab")
-except (LookupError, OSError):
-    nltk.download("punkt_tab")
-try:
-    nltk.data.find("taggers/averaged_perceptron_tagger_eng")
-except (LookupError, OSError):
-    nltk.download("averaged_perceptron_tagger_eng")
-
-# caching allows ~50% compilation time reduction
-# see https://docs.google.com/document/d/1y5CRfMLdwEoF1nTk9q8qEu1mgMUuUtvhklPKJ2emLU8/edit#heading=h.o2asbxsrp1ma
-CURRENT_DIR = Path(__file__).resolve().parent
-os.environ["TORCHINDUCTOR_CACHE_DIR"] = os.path.join(CURRENT_DIR, "tmp")
-
 logging.getLogger("numba").setLevel(logging.WARNING)  # quiet down numba logs
+
 
 @dataclass
 class ParsedArguments:
@@ -218,6 +203,7 @@ def prepare_module_args(module_kwargs: ModuleArguments, llm_backend: BackendSele
 def prepare_all_args(args: ParsedArguments) -> None:
     """Validate selectors and apply the global device to selected configs only."""
 
+    require_nltk_assets()
     prepare_module_args(args.module_kwargs, args.llm_backend)
     if args.module_kwargs.device is None:
         return
@@ -360,18 +346,57 @@ def build_pipeline_unit(
     llm_selection = llm_backend.copy_for_pipeline()
     tts_selection = tts_backend.copy_for_pipeline()
 
+    queue_max_items = int(module_kwargs.pipeline_queue_max_items)
+    if queue_max_items <= 0:
+        raise ValueError("session.pipeline_queue_max_items must be greater than zero")
+
     should_listen = Event()
     response_playing = Event()
     cancel_scope = CancelScope()
     speculative_turns = SpeculativeTurnTracker()
-    recv_audio_chunks_queue: Queue[AudioInItem] = Queue()
-    send_audio_chunks_queue: Queue[AudioOutItem] = Queue()
-    spoken_prompt_queue: Queue[VADOutItem] = Queue()
-    stt_output_queue: Queue[STTOutItem] = Queue()
-    text_prompt_queue: Queue[TextPromptItem] = Queue()
-    lm_response_queue: Queue[LMOutItem] = Queue()
-    lm_processed_queue: Queue[TTSInItem] = Queue()
-    text_output_queue: Queue[TextEventItem] = Queue()
+    recv_audio_chunks_queue: Queue[AudioInItem] = AudioIngressQueue(
+        name="audio_input",
+        maxsize=queue_max_items,
+    )
+    send_audio_chunks_queue: Queue[AudioOutItem] = BoundedPipelineQueue(
+        name="audio_output",
+        maxsize=queue_max_items,
+    )
+    spoken_prompt_queue: Queue[VADOutItem] = BoundedPipelineQueue(
+        name="vad_to_stt",
+        maxsize=queue_max_items,
+    )
+    stt_output_queue: Queue[STTOutItem] = BoundedPipelineQueue(
+        name="stt_output",
+        maxsize=queue_max_items,
+    )
+    text_prompt_queue: Queue[TextPromptItem] = BoundedPipelineQueue(
+        name="text_prompt",
+        maxsize=queue_max_items,
+    )
+    lm_response_queue: Queue[LMOutItem] = BoundedPipelineQueue(
+        name="llm_output",
+        maxsize=queue_max_items,
+    )
+    lm_processed_queue: Queue[TTSInItem] = BoundedPipelineQueue(
+        name="tts_input",
+        maxsize=queue_max_items,
+    )
+    text_output_queue: Queue[TextEventItem] = BoundedPipelineQueue(
+        name="event_output",
+        maxsize=queue_max_items,
+    )
+
+    pipeline_queues = {
+        "audio_input": recv_audio_chunks_queue,
+        "vad_to_stt": spoken_prompt_queue,
+        "stt_output": stt_output_queue,
+        "text_prompt": text_prompt_queue,
+        "llm_output": lm_response_queue,
+        "tts_input": lm_processed_queue,
+        "audio_output": send_audio_chunks_queue,
+        "event_output": text_output_queue,
+    }
 
     chat_size = llm_selection.config.get("chat_size", 10)
     default_instructions = llm_selection.config.get("init_chat_prompt")
@@ -422,4 +447,5 @@ def build_pipeline_unit(
         text_output_queue=text_output_queue,
         text_prompt_queue=text_prompt_queue,
         handlers=handlers,
+        pipeline_queues=pipeline_queues,
     )

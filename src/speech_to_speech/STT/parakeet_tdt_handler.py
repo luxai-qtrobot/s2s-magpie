@@ -21,6 +21,7 @@ import numpy as np
 from rich.console import Console
 from rich.text import Text
 
+from speech_to_speech.model_assets import locked_huggingface_asset, resolve_huggingface_file
 from speech_to_speech.pipeline.handler_types import STTIn, STTOut
 from speech_to_speech.pipeline.messages import PartialTranscription, Transcription
 from speech_to_speech.STT.base_stt_handler import BaseSTTHandler
@@ -102,6 +103,9 @@ class ParakeetTDTSTTHandler(BaseSTTHandler):
     def setup(
         self,
         model_name: Optional[str] = None,
+        model_revision: Optional[str] = None,
+        cache_dir: Optional[str] = None,
+        local_files_only: bool = True,
         device: str = "auto",
         compute_type: str = "float16",
         language: Optional[str] = None,
@@ -155,7 +159,12 @@ class ParakeetTDTSTTHandler(BaseSTTHandler):
         if self.device == "mps":
             self._setup_mlx(model_name)
         else:
-            self._setup_nano_parakeet(model_name)
+            self._setup_nano_parakeet(
+                model_name,
+                model_revision=model_revision,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+            )
 
         # Setup streaming handler if live transcription is enabled
         self.streaming_handler = None
@@ -190,11 +199,17 @@ class ParakeetTDTSTTHandler(BaseSTTHandler):
                 "mlx-audio is required for Parakeet TDT on Apple Silicon. Install with: pip install mlx-audio"
             ) from e
 
-    def _setup_nano_parakeet(self, model_name: str) -> None:
+    def _setup_nano_parakeet(
+        self,
+        model_name: str,
+        *,
+        model_revision: str | None,
+        cache_dir: str | None,
+        local_files_only: bool,
+    ) -> None:
         """Setup for CUDA/CPU using nano-parakeet."""
         try:
             import torch
-            from nano_parakeet import from_pretrained
 
             self.backend = "nano_parakeet"
 
@@ -202,13 +217,59 @@ class ParakeetTDTSTTHandler(BaseSTTHandler):
                 logger.warning("CUDA requested but not available. Falling back to CPU for nano-parakeet.")
                 self.device = "cpu"
 
-            self.model = from_pretrained(model_name=model_name, device=self.device)
+            locked_asset = locked_huggingface_asset("parakeet_tdt_0_6b_v3")
+            filename = (
+                str(locked_asset["files"][0])
+                if model_name == locked_asset["repo_id"]
+                else f"{model_name.rstrip('/').split('/')[-1]}.nemo"
+            )
+            checkpoint_path = resolve_huggingface_file(
+                model_name,
+                filename=filename,
+                revision=model_revision or (
+                    str(locked_asset["revision"]) if model_name == locked_asset["repo_id"] else None
+                ),
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+            )
+            self.model = self._load_nano_parakeet_checkpoint(checkpoint_path, device=self.device)
 
-            logger.info(f"nano-parakeet model loaded successfully on {self.device}")
+            logger.info("nano-parakeet model loaded from %s on %s", checkpoint_path, self.device)
         except ImportError as e:
             raise ImportError(
                 "nano-parakeet is required for Parakeet TDT on CUDA/CPU. Install with: pip install nano-parakeet"
             ) from e
+
+    @staticmethod
+    def _load_nano_parakeet_checkpoint(checkpoint_path, *, device: str):
+        """Load nano-parakeet from an already-resolved .nemo checkpoint."""
+
+        import sentencepiece as spm
+        import torch
+        from nano_parakeet import ParakeetTDT
+        from nano_parakeet._loader import get_bundled_tokenizer_proto, load_nemo_state_dict, remap_state_dict
+
+        dtype = None
+        if device != "cpu" and torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+
+        model = ParakeetTDT()
+        state_dict = load_nemo_state_dict(str(checkpoint_path), map_location="cpu")
+        state_dict = remap_state_dict(state_dict)
+        missing, _unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            raise RuntimeError(f"Missing keys in nano-parakeet state_dict: {missing[:10]}")
+        model = model.to(device).eval()
+
+        if dtype is not None:
+            model.encoder.to(dtype)
+            model.decoder.to(dtype)
+            model.joint.to(dtype)
+
+        tokenizer = spm.SentencePieceProcessor()
+        tokenizer.LoadFromSerializedProto(get_bundled_tokenizer_proto())
+        model.sp = tokenizer
+        return model
 
     def warmup(self) -> None:
         """Warm up the model with a dummy input."""

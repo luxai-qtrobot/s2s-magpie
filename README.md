@@ -42,12 +42,17 @@ while retaining clear provenance for future upstream updates.
 
 ## Install
 
-Create or activate the Python environment for the service, install the
-Jetson-compatible Torch/Torchaudio build when required, then install the
-service itself:
+Create a dedicated environment, install the known-good CUDA-enabled
+Torch/Torchaudio builds for the robot's JetPack and Python versions, then
+install the service with its model-loader constraints. JetPack 7 does not
+currently have a separate NVIDIA Jetson Torch distribution, so preserve the
+exact CUDA build qualified on the target robot.
 
 ```bash
-uv pip install -e .
+python3 -m venv .venv
+source .venv/bin/activate
+# Install the target-qualified Torch/Torchaudio builds here first.
+uv pip install .
 ```
 
 This distribution contains its pinned, modified `speech_to_speech` core and
@@ -57,6 +62,45 @@ the same environment; two distributions must not own that import namespace.
 FastAPI, Uvicorn, WebSocket, WebRTC, aiortc, and local PortAudio dependencies
 are not required. Qwen3-TTS uses its Torch backend by default; install
 `.[qwen-ggml]` only when a compatible qwentts.cpp build is actually desired.
+
+### Provision models before deployment
+
+Runtime startup is deliberately offline: it will not download NLTK data,
+load mutable GitHub branches, or resolve the current head of a Hugging Face
+repository. Model repositories and revisions, NLTK checksums, and the three
+model-loader package versions are recorded in
+[`src/speech_to_speech/model_assets.lock.json`](src/speech_to_speech/model_assets.lock.json).
+
+While the build/provisioning machine has network access, populate stable cache
+directories and then verify them without network access:
+
+```bash
+python scripts/provision_assets.py \
+  --hf-cache /opt/luxai/s2s-magpie/models/huggingface \
+  --nltk-data /opt/luxai/s2s-magpie/models/nltk_data
+
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
+HF_HUB_CACHE=/opt/luxai/s2s-magpie/models/huggingface \
+NLTK_DATA=/opt/luxai/s2s-magpie/models/nltk_data \
+python scripts/provision_assets.py --verify-only \
+  --hf-cache /opt/luxai/s2s-magpie/models/huggingface \
+  --nltk-data /opt/luxai/s2s-magpie/models/nltk_data
+```
+
+Use those same four environment variables when launching the service. The
+bundled Paramify defaults also set `local_files_only: true`, so a missing or
+wrong cache fails at startup with a provisioning error instead of silently
+using the network. A custom model must be supplied as a local path or paired
+with an immutable revision. Offline GGML Qwen deployments additionally need
+explicit local talker and codec GGUF paths.
+
+Because NVIDIA's Jetson Torch wheels are tied to JetPack and Python, a single
+portable full lock would be misleading. After validating one robot image,
+capture that environment alongside the image metadata:
+
+```bash
+uv pip freeze --strict --exclude-editable > requirements-jetson.lock.txt
+```
 
 ## Configuration and run
 

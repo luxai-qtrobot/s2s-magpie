@@ -68,5 +68,25 @@ class PipelineUnit(BaseModel):
     text_output_queue: Queue
     text_prompt_queue: Queue
     handlers: list[Any]
+    pipeline_queues: dict[str, Queue] = Field(default_factory=dict)
 
     session: Optional[SessionState] = None
+
+    def queue_metrics(self) -> dict[str, dict[str, int | str]]:
+        """Return bounded-queue runtime counters for health/diagnostics."""
+
+        snapshots: dict[str, dict[str, int | str]] = {}
+        for name, queue in self.pipeline_queues.items():
+            metrics = getattr(queue, "metrics", None)
+            if callable(metrics):
+                snapshots[name] = metrics().as_dict()
+            else:
+                snapshots[name] = {
+                    "name": name,
+                    "size": queue.qsize(),
+                    "max_size": queue.maxsize,
+                    "high_watermark": queue.qsize(),
+                    "overloads": 0,
+                    "dropped_items": 0,
+                }
+        return snapshots

@@ -56,6 +56,7 @@ class ResponsesApiModelHandler(BaseOpenAICompatibleHandler):
                 },
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
             ],
+            max_output_tokens=min(8, self.max_output_tokens),
             timeout=self.request_timeout,
         )
         end = time.time()
@@ -82,6 +83,7 @@ class ResponsesApiModelHandler(BaseOpenAICompatibleHandler):
                         "content": [{"type": "input_text", "text": user}],
                     },
                 ],
+                max_output_tokens=self.max_output_tokens,
                 timeout=timeout,
             )
             return response.output_text
@@ -95,8 +97,10 @@ class ResponsesApiModelHandler(BaseOpenAICompatibleHandler):
         req_tool_choice: Any,
     ) -> dict[str, Any]:
         kwargs = _build_chat_optional_kwargs(req_tools, req_tool_choice)
-        max_tokens = getattr(response, "max_output_tokens", None) if response is not None else None
-        kwargs.setdefault("max_tokens", max_tokens or self.audio_max_tokens)
+        kwargs.setdefault(
+            "max_tokens",
+            self._bounded_output_tokens(response, self.audio_max_tokens),
+        )
         kwargs.setdefault("temperature", self.audio_temperature)
         return kwargs
 
@@ -136,6 +140,10 @@ class ResponsesApiModelHandler(BaseOpenAICompatibleHandler):
         if req_tool_choice is not None:
             optional_kwargs["tool_choice"] = req_tool_choice
         return optional_kwargs
+
+    @property
+    def _text_token_limit_parameter(self) -> str:
+        return "max_output_tokens"
 
     def _request(self, api_input: Any, optional_kwargs: dict[str, Any]) -> Any:
         return self.client.responses.create(

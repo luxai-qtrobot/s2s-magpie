@@ -42,16 +42,17 @@ dependencies = [
     "torch>=2.4.0",
     "torchaudio>=2.4.0",
     "transformers>=4.57.0",
-    "nano-parakeet>=0.2.0; platform_system != 'Darwin'",
-    "faster-qwen3-tts>=0.3.2; platform_system == 'Linux'",
-    "faster-qwen3-tts>=0.3.2; platform_system == 'Windows'",
+    "nano-parakeet==0.2.1; platform_system != 'Darwin'",
+    "faster-qwen3-tts==0.3.2; platform_system == 'Linux'",
+    "faster-qwen3-tts==0.3.2; platform_system == 'Windows'",
+    "silero-vad==6.2.1",
     "librosa==0.11.0",
     "lingua-language-detector>=2.0.2",
 ]
 
 [project.optional-dependencies]
 qwen-ggml = [
-    "faster-qwen3-tts[ggml]>=0.3.2; platform_system == 'Linux'",
+    "faster-qwen3-tts[ggml]==0.3.2; platform_system == 'Linux'",
 ]
 chattts = ["ChatTTS>=0.1.1"]
 faster-whisper = ["faster-whisper>=1.0.3"]
@@ -85,7 +86,7 @@ where = ["src"]
 include = ["luxai.s2s_magpie*", "speech_to_speech*"]
 
 [tool.setuptools.package-data]
-speech_to_speech = ["TTS/*.wav"]
+speech_to_speech = ["TTS/*.wav", "model_assets.lock.json"]
 
 [tool.setuptools.data-files]
 "share/luxai-s2s-magpie/config" = ["config/config.yaml"]
@@ -97,3 +98,6 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 ignore = ["E501"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

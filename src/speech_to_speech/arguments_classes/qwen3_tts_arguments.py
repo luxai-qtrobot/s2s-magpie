@@ -7,8 +7,22 @@ class Qwen3TTSHandlerArguments:
     qwen3_tts_model_name: str = field(
         default="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
         metadata={
-            "help": "The Qwen3-TTS model to use (HuggingFace Hub ID or local path). Default is 'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice'. On Apple Silicon, Qwen/* model IDs are auto-mapped to the corresponding mlx-community/* model when possible, defaulting to the 6bit MLX variant unless the model name already pins a specific suffix."
+            "help": "The Qwen3-TTS model to use (Hugging Face Hub ID or local path). Default is 'Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice'. On Apple Silicon, Qwen/* model IDs are auto-mapped to the corresponding mlx-community/* model when possible, defaulting to the 6bit MLX variant unless the model name already pins a specific suffix."
         },
+    )
+    qwen3_tts_model_revision: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Immutable Hugging Face revision for the Torch model. The bundled model lock is used for the production model when unset."
+        },
+    )
+    qwen3_tts_cache_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Optional Hugging Face cache directory containing the Qwen3-TTS model."},
+    )
+    qwen3_tts_local_files_only: bool = field(
+        default=True,
+        metadata={"help": "Require Qwen3-TTS to use a pre-provisioned local snapshot. Default is True."},
     )
     qwen3_tts_device: str = field(
         default="cuda",

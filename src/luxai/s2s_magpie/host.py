@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from threading import Event
 from typing import Any
 
 from luxai.magpie.frames import AudioFrameRaw, DictFrame, Frame
 from luxai.magpie.nodes import ServerNode
-from luxai.magpie.transport import ZMQRpcResponder, ZmqStreamReader
+from luxai.magpie.transport import ZMQRpcResponder
 from luxai.magpie.utils import Logger
 from speech_to_speech.api.openai_realtime.pipeline_unit import PipelineUnit
 from speech_to_speech.runtime.session import SessionRuntime
@@ -27,7 +26,7 @@ from .protocol import (
     bind_endpoint,
     build_system_descriptor,
 )
-from .transport import MagpieSessionSink
+from .transport import MagpieSessionSink, MagpieSinkError, StrictZmqStreamReader
 
 
 def _decode_frame(raw: object) -> Frame:
@@ -70,6 +69,7 @@ class MagpieSessionHost:
             event_output_queue_size=self._event_output_queue_size,
         )
         self._runtime: SessionRuntime | None = None
+        self._runtime_watch_task: asyncio.Task[None] | None = None
         self._client_gid: FrameId | None = None
         self._closing_client_gid: FrameId | None = None
         self._session_close_task: asyncio.Task[None] | None = None
@@ -77,6 +77,14 @@ class MagpieSessionHost:
         self._retired_client_gids: dict[FrameId, None] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._stopped = asyncio.Event()
+        self._fatal_error: Exception | None = None
+        self._fatal_event = asyncio.Event()
+        self._stop_task: asyncio.Task[None] | None = None
+        self._stop_complete = False
+        self._audio_reader_closed = False
+        self._event_reader_closed = False
+        self._sink_shutdown = False
+        self._rpc_terminated = False
 
         # Follow the standard LuxAI driver layout: the RPC responder occupies
         # the configured base port and every stream is a fixed offset from it.
@@ -92,14 +100,14 @@ class MagpieSessionHost:
             audio_queue_size=self._audio_output_queue_size,
             event_queue_size=self._event_output_queue_size,
         )
-        self._audio_reader = ZmqStreamReader(
+        self._audio_reader = StrictZmqStreamReader(
             bind_endpoint(self._base_port, AUDIO_INPUT_PORT_OFFSET),
             topic=AUDIO_INPUT_TOPIC,
             queue_size=self._audio_input_queue_size,
             bind=True,
             delivery="reliable",
         )
-        self._event_reader = ZmqStreamReader(
+        self._event_reader = StrictZmqStreamReader(
             bind_endpoint(self._base_port, EVENT_INPUT_PORT_OFFSET),
             topic=EVENT_INPUT_TOPIC,
             queue_size=self._event_input_queue_size,
@@ -123,32 +131,133 @@ class MagpieSessionHost:
     async def wait(self) -> None:
         if not self._tasks:
             raise RuntimeError("MAGPIE S2S host has not been started")
-        done, _ = await asyncio.wait(self._tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            task.result()
+        fatal_waiter = asyncio.create_task(
+            self._fatal_event.wait(),
+            name="magpie-s2s-fatal-output-wait",
+        )
+        try:
+            done, _ = await asyncio.wait(
+                [*self._tasks, fatal_waiter],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if fatal_waiter in done:
+                error = self._fatal_error
+                if error is None:
+                    raise RuntimeError("MAGPIE S2S host entered a fatal state")
+                raise error
+            for task in done:
+                task.result()
+        finally:
+            fatal_waiter.cancel()
+            await asyncio.gather(fatal_waiter, return_exceptions=True)
+
+    def _fail_output_transport(self, exc: Exception) -> None:
+        if self._fatal_error is None:
+            self._fatal_error = exc
+            self._fatal_event.set()
 
     async def stop(self) -> None:
-        if self._stopped.is_set():
+        if self._stop_complete:
             return
+        stop_task = self._stop_task
+        if stop_task is None:
+            stop_task = asyncio.create_task(self._stop_impl(), name="magpie-s2s-host-cleanup")
+            self._stop_task = stop_task
+        try:
+            await asyncio.shield(stop_task)
+        except BaseException:
+            if stop_task.done() and self._stop_task is stop_task:
+                self._stop_task = None
+            raise
+
+    async def _stop_impl(self) -> None:
+        failures: list[BaseException] = []
+
+        def remember_failure(resource: str, exc: BaseException) -> None:
+            failures.append(exc)
+            Logger.error(
+                f"Failed to stop MAGPIE S2S {resource}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
         self._stopped.set()
         for task in self._tasks:
             task.cancel()
+
         try:
             await asyncio.gather(*self._tasks, return_exceptions=True)
-            self._tasks.clear()
-            close_task = self._session_close_task
-            if close_task is not None:
-                await asyncio.shield(close_task)
-            else:
-                await self._close_session()
+        except BaseException as exc:
+            remember_failure("input tasks", exc)
         finally:
-            await asyncio.gather(
-                asyncio.to_thread(self._audio_reader.close),
-                asyncio.to_thread(self._event_reader.close),
-                return_exceptions=True,
-            )
-            await self._sink.shutdown()
-            await asyncio.to_thread(self._rpc_server.terminate, 1.0)
+            self._tasks.clear()
+
+        close_task = self._session_close_task
+        if close_task is not None:
+            try:
+                await asyncio.shield(close_task)
+            except BaseException as exc:
+                remember_failure("session drain task", exc)
+
+        try:
+            await self._close_session()
+        except BaseException as exc:
+            remember_failure("active session", exc)
+
+        runtime_watch = self._runtime_watch_task
+        if runtime_watch is not None and not runtime_watch.done():
+            runtime_watch.cancel()
+        if runtime_watch is not None:
+            try:
+                await runtime_watch
+            except asyncio.CancelledError:
+                pass
+            except BaseException as exc:
+                remember_failure("runtime watcher", exc)
+            finally:
+                if self._runtime_watch_task is runtime_watch:
+                    self._runtime_watch_task = None
+
+        if not self._audio_reader_closed:
+            try:
+                await asyncio.to_thread(self._audio_reader.close)
+            except BaseException as exc:
+                remember_failure("audio reader", exc)
+            else:
+                self._audio_reader_closed = True
+
+        if not self._event_reader_closed:
+            try:
+                await asyncio.to_thread(self._event_reader.close)
+            except BaseException as exc:
+                remember_failure("event reader", exc)
+            else:
+                self._event_reader_closed = True
+
+        if not self._sink_shutdown:
+            try:
+                await self._sink.shutdown()
+            except BaseException as exc:
+                remember_failure("output sink", exc)
+            else:
+                self._sink_shutdown = True
+
+        if not self._rpc_terminated:
+            try:
+                await asyncio.to_thread(self._rpc_server.terminate, 1.0)
+            except BaseException as exc:
+                remember_failure("RPC server", exc)
+            else:
+                self._rpc_terminated = True
+
+        self._stop_complete = (
+            self._audio_reader_closed
+            and self._event_reader_closed
+            and self._sink_shutdown
+            and self._rpc_terminated
+            and self._runtime is None
+        )
+        if failures:
+            raise failures[0]
 
     def _on_rpc(self, request: dict) -> dict:
         """Serve discovery and lightweight process/session status."""
@@ -280,10 +389,16 @@ class MagpieSessionHost:
                     continue
                 runtime = await self._ensure_session(frame.gid)
                 await runtime.handle_event(frame.value)
+            except MagpieSinkError as exc:
+                Logger.error(f"MAGPIE output failed; terminating client session: {exc}")
+                self._fail_output_transport(exc)
+                runtime = self._runtime
+                if event_gid == self._client_gid and runtime is not None:
+                    runtime.fail_delivery(exc)
             except Exception as exc:
                 Logger.error(f"MAGPIE client event failed: {exc}")
                 if event_gid == self._client_gid:
-                    with contextlib.suppress(Exception):
+                    try:
                         await self._sink.send_events(
                             [
                                 {
@@ -295,6 +410,17 @@ class MagpieSessionHost:
                                 }
                             ]
                         )
+                    except MagpieSinkError as sink_exc:
+                        Logger.error(
+                            "MAGPIE error-event delivery failed; terminating "
+                            f"client session: {sink_exc}"
+                        )
+                        self._fail_output_transport(sink_exc)
+                        runtime = self._runtime
+                        if runtime is not None:
+                            runtime.fail_delivery(sink_exc)
+                    except Exception as sink_exc:
+                        Logger.error(f"MAGPIE error-event delivery failed: {sink_exc}")
 
     async def _ensure_session(self, client_gid: FrameId) -> SessionRuntime:
         runtime = self._runtime
@@ -307,34 +433,86 @@ class MagpieSessionHost:
         try:
             await runtime.start()
         except BaseException:
-            await self._sink.close()
+            try:
+                await self._sink.close()
+            except Exception as close_exc:
+                Logger.error(f"Failed to reset MAGPIE sink after session start failure: {close_exc}")
+                if isinstance(close_exc, MagpieSinkError):
+                    self._fail_output_transport(close_exc)
             raise
         self._runtime = runtime
         self._client_gid = client_gid
+        self._runtime_watch_task = asyncio.create_task(
+            self._watch_runtime(runtime, client_gid),
+            name=f"magpie-s2s-runtime-watch-{client_gid}",
+        )
         Logger.info(f"MAGPIE client session opened: gid={client_gid}")
         return runtime
+
+    async def _watch_runtime(self, runtime: SessionRuntime, client_gid: FrameId) -> None:
+        """Detach a runtime that closed itself after terminal delivery failure."""
+
+        this_task = asyncio.current_task()
+        try:
+            await runtime.wait_closed()
+            self._detach_runtime(runtime, client_gid)
+            if runtime.terminal_error is not None:
+                Logger.error(
+                    "MAGPIE client session released after terminal output failure: "
+                    f"gid={client_gid}, error={runtime.terminal_error}"
+                )
+                self._fail_output_transport(runtime.terminal_error)
+        finally:
+            if self._runtime_watch_task is this_task:
+                self._runtime_watch_task = None
+
+    def _detach_runtime(self, runtime: SessionRuntime, client_gid: FrameId | None) -> bool:
+        if self._runtime is not runtime:
+            return False
+        self._runtime = None
+        self._client_gid = None
+        if client_gid is not None:
+            self._retired_client_gids[client_gid] = None
+            while len(self._retired_client_gids) > 128:
+                self._retired_client_gids.pop(next(iter(self._retired_client_gids)))
+        Logger.info(f"MAGPIE client session closed: gid={client_gid}")
+        return True
 
     async def _drain_session(self, client_gid: FrameId) -> None:
         """Drain one accepted close without blocking duplicate acknowledgements."""
 
         this_task = asyncio.current_task()
-        drained = False
+        released = False
         try:
-            await self._close_session()
-            await self._sink.send_session_closed(client_gid)
-            drained = True
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            Logger.error(
-                f"MAGPIE client session drain failed: gid={client_gid}, error={exc}"
-            )
+            try:
+                await self._close_session()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                Logger.error(
+                    f"MAGPIE client session drain failed: gid={client_gid}, error={exc}"
+                )
+                if isinstance(exc, MagpieSinkError):
+                    self._fail_output_transport(exc)
+            finally:
+                released = self._runtime is None
+
+            if released:
+                try:
+                    await self._sink.send_session_closed(client_gid)
+                except Exception as exc:
+                    Logger.error(
+                        "MAGPIE session closed acknowledgement failed: "
+                        f"gid={client_gid}, error={exc}"
+                    )
+                    if isinstance(exc, MagpieSinkError):
+                        self._fail_output_transport(exc)
         finally:
             if self._session_close_task is this_task:
                 self._session_close_task = None
                 self._closing_client_gid = None
 
-        if drained and not self._stopped.is_set() and not self._stop_event.is_set():
+        if released and not self._stopped.is_set() and not self._stop_event.is_set():
             pending = self._pending_session_update
             self._pending_session_update = None
             if pending is not None:
@@ -347,20 +525,23 @@ class MagpieSessionHost:
                         "Deferred MAGPIE session.update failed: "
                         f"gid={pending_gid}, error={exc}"
                     )
+                    if isinstance(exc, MagpieSinkError):
+                        self._fail_output_transport(exc)
+                        runtime = self._runtime
+                        if runtime is not None:
+                            runtime.fail_delivery(exc)
 
     async def _close_session(self) -> None:
         runtime = self._runtime
         if runtime is None:
             return
         client_gid = self._client_gid
-        await runtime.close()
-        if self._runtime is runtime:
-            self._runtime = None
-            self._client_gid = None
-            if client_gid is not None:
-                self._retired_client_gids[client_gid] = None
-                while len(self._retired_client_gids) > 128:
-                    self._retired_client_gids.pop(
-                        next(iter(self._retired_client_gids))
-                    )
-            Logger.info(f"MAGPIE client session closed: gid={client_gid}")
+        try:
+            await runtime.close()
+        finally:
+            # Runtime cleanup may deliberately re-raise a sink failure after it
+            # has released the pipeline. Do not retain that completed runtime.
+            # If caller cancellation interrupted the shielded wait, its watcher
+            # will detach it once background cleanup actually completes.
+            if runtime.closed:
+                self._detach_runtime(runtime, client_gid)

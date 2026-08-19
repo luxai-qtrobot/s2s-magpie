@@ -39,6 +39,16 @@ parameters:
         value: 3.0
         description: Final wait after forcing the pipeline to stop
 
+      - name: pipeline_queue_max_items
+        type: int
+        value: 256
+        description: Maximum item count for each in-process pipeline queue
+
+      - name: handler_stall_timeout_seconds
+        type: double
+        value: 180.0
+        description: Exit when a pipeline handler makes no progress for this duration
+
   # ---- Voice activity and turn completion ----
   - name: vad
     type: group
@@ -60,6 +70,11 @@ parameters:
         type: int
         value: 192
 
+      - name: max_speech_ms
+        type: double
+        value: 30000.0
+        description: Force a bounded turn segment after this much continuous speech
+
       - name: speech_pad_ms
         type: int
         value: 500
@@ -67,6 +82,11 @@ parameters:
       - name: audio_enhancement
         type: bool
         value: false
+
+      - name: silero_model_path
+        type: string
+        value: ""
+        description: Optional local Silero TorchScript checkpoint; empty uses the pinned silero-vad wheel
 
       - name: speculative_reopen_ms
         type: int
@@ -81,6 +101,23 @@ parameters:
         value: 0
 
       - name: smart_turn
+        type: bool
+        value: true
+
+      - name: smart_turn_model_path
+        type: string
+        value: ""
+        description: Optional local Smart Turn ONNX file
+
+      - name: smart_turn_model_revision
+        type: string
+        value: "f766f81d3cfdf7737ac64aad813d91bbfd56bf93"
+
+      - name: smart_turn_cache_dir
+        type: string
+        value: ""
+
+      - name: smart_turn_local_files_only
         type: bool
         value: true
 
@@ -114,6 +151,18 @@ parameters:
         type: string
         value: nvidia/parakeet-tdt-0.6b-v3
         scope: cli
+
+      - name: model_revision
+        type: string
+        value: "b51b7dc0fbf7f266a97880fb4b626c56d28f4b96"
+
+      - name: cache_dir
+        type: string
+        value: ""
+
+      - name: local_files_only
+        type: bool
+        value: true
 
       - name: device
         type: string
@@ -157,6 +206,18 @@ parameters:
         type: bool
         value: true
 
+      - name: max_output_tokens
+        type: int
+        value: 256
+        description: Hard output-token ceiling for every text LLM request
+        scope: cli
+
+      - name: request_timeout_s
+        type: double
+        value: 20.0
+        description: OpenAI-compatible provider I/O timeout in seconds
+        scope: cli
+
       - name: user_role
         type: string
         value: user
@@ -196,6 +257,18 @@ parameters:
         type: string
         value: Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
         scope: cli
+
+      - name: model_revision
+        type: string
+        value: "85e237c12c027371202489a0ec509ded67b5e4b5"
+
+      - name: cache_dir
+        type: string
+        value: ""
+
+      - name: local_files_only
+        type: bool
+        value: true
 
       - name: backend_engine
         type: string

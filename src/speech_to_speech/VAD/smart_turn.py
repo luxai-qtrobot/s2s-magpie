@@ -11,13 +11,13 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 
+from speech_to_speech.model_assets import locked_huggingface_asset, resolve_huggingface_file
+
 logger = logging.getLogger(__name__)
 
-MODEL_REPO_ID = "pipecat-ai/smart-turn-v3"
 MODEL_VERSION = "v3.2"
 MODEL_SAMPLE_RATE = 16000
 MAX_AUDIO_SECONDS = 8
@@ -40,6 +40,9 @@ class SmartTurnAnalyzer:
         self,
         *,
         model_path: str | None = None,
+        model_revision: str | None = None,
+        cache_dir: str | None = None,
+        local_files_only: bool = True,
         threshold: float = 0.5,
         cpu_count: int = 1,
         warmup: bool = True,
@@ -57,9 +60,15 @@ class SmartTurnAnalyzer:
         from transformers import WhisperFeatureExtractor
 
         self.threshold = threshold
-        self.model_path = Path(model_path).expanduser() if model_path else self._download_model()
-        if not self.model_path.is_file():
-            raise FileNotFoundError(f"Smart Turn model not found: {self.model_path}")
+        locked_asset = locked_huggingface_asset("smart_turn_v3_2_cpu")
+        model_reference = model_path or str(locked_asset["repo_id"])
+        self.model_path = resolve_huggingface_file(
+            model_reference,
+            filename=MODEL_FILENAME,
+            revision=model_revision or str(locked_asset["revision"]),
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+        )
 
         session_options = ort.SessionOptions()
         session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -83,22 +92,6 @@ class SmartTurnAnalyzer:
         )
         if warmup:
             self.predict(np.zeros(MODEL_SAMPLE_RATE, dtype=np.float32))
-
-    @staticmethod
-    def _download_model() -> Path:
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError as exc:
-            raise ImportError(
-                "Smart Turn model download requires huggingface-hub. Install it with `pip install huggingface-hub`."
-            ) from exc
-
-        return Path(
-            hf_hub_download(
-                repo_id=MODEL_REPO_ID,
-                filename=MODEL_FILENAME,
-            )
-        )
 
     @staticmethod
     def _prepare_audio(audio_array: np.ndarray, sample_rate: int) -> np.ndarray:

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 from queue import Empty, Queue
-from threading import Event
-from time import perf_counter
+from threading import Event, Lock
+from time import monotonic, perf_counter
 from typing import Any, Generic, Iterator, TypeVar, cast
 
 import numpy as np
@@ -43,8 +43,12 @@ class BaseHandler(Generic[InT, OutT]):
         self.queue_in = queue_in
         self.queue_out = queue_out
         self.pipeline_index: int | None = None
+        self._last_time = 0.0
+        self._activity_lock = Lock()
+        self._processing = False
+        self._processing_item = ""
+        self._last_progress_at = monotonic()
         self.setup(*setup_args, **setup_kwargs)
-        self._times: list[float] = []
 
     def setup(self, *arg: Any, **kwargs: Any) -> None:
         pass
@@ -101,6 +105,32 @@ class BaseHandler(Generic[InT, OutT]):
             )
         return output
 
+    def _begin_work(self, item: object) -> None:
+        with self._activity_lock:
+            self._processing = True
+            self._processing_item = type(item).__name__
+            self._last_progress_at = monotonic()
+
+    def _mark_progress(self) -> None:
+        with self._activity_lock:
+            self._last_progress_at = monotonic()
+
+    def _finish_work(self) -> None:
+        with self._activity_lock:
+            self._processing = False
+            self._processing_item = ""
+            self._last_progress_at = monotonic()
+
+    def worker_activity_snapshot(self) -> tuple[bool, float, str]:
+        """Return processing state, seconds since progress, and item label."""
+
+        with self._activity_lock:
+            return (
+                self._processing,
+                max(0.0, monotonic() - self._last_progress_at),
+                self._processing_item,
+            )
+
     def run(self) -> None:
         if self.pipeline_index is not None:
             pipeline_log_ctx.set(self.pipeline_index)
@@ -112,62 +142,78 @@ class BaseHandler(Generic[InT, OutT]):
             except Empty:
                 continue
 
-            if isinstance(item, PipelineControlMessage) and is_control_message(item, SESSION_END.kind):
-                logger.debug(f"{self.__class__.__name__}: session end received")
+            self._begin_work(item)
+            try:
+                if isinstance(item, PipelineControlMessage) and is_control_message(item, SESSION_END.kind):
+                    logger.debug(f"{self.__class__.__name__}: session end received")
+                    try:
+                        self.on_session_end()
+                    except Exception as e:
+                        logger.error(
+                            f"{self.__class__.__name__}: Error in on_session_end(): {type(e).__name__}: {e}",
+                            exc_info=True,
+                        )
+                    self.queue_out.put(item)
+                    self._mark_progress()
+                    continue
+
+                if isinstance(item, bytes) and item == PIPELINE_END:
+                    # sentinel signal to avoid queue deadlock
+                    logger.debug("Stopping thread")
+                    break
+
+                if isinstance(item, PipelineControlMessage):
+                    logger.warning("%s: unexpected control message kind: %s", self.__class__.__name__, item.kind)
+                    continue
+
+                typed_item = cast(InT, item)
+                if not self.should_process_input(typed_item):
+                    continue
+
+                # Response events share the TTS queue with their audio. Forwarding
+                # them here preserves the model's exact text/tool/audio order.
+                if isinstance(item, PipelineEvent):
+                    self.queue_out.put(cast(OutT, item))
+                    self._mark_progress()
+                    continue
+
+                start_time = perf_counter()
                 try:
-                    self.on_session_end()
+                    for output in self.process(typed_item):
+                        if not self.should_emit_output(output):
+                            start_time = perf_counter()
+                            self._mark_progress()
+                            continue
+                        self._last_time = perf_counter() - start_time
+                        if self.should_log_timing(output):
+                            logger.log(self.timing_log_level, "%s: %.3f s", self.__class__.__name__, self.last_time)
+                        self.before_emit_output(output)
+                        queued_output = cast(
+                            OutT | PipelineControlMessage | bytes,
+                            self.output_for_queue(output, typed_item),
+                        )
+                        self.queue_out.put(queued_output)
+                        self._mark_progress()
+                        start_time = perf_counter()
                 except Exception as e:
                     logger.error(
-                        f"{self.__class__.__name__}: Error in on_session_end(): {type(e).__name__}: {e}",
+                        f"{self.__class__.__name__}: Error in process(): {type(e).__name__}: {e}",
                         exc_info=True,
                     )
-                self.queue_out.put(item)
-                continue
+                    self._mark_progress()
+            finally:
+                self._finish_work()
 
-            if isinstance(item, bytes) and item == PIPELINE_END:
-                # sentinel signal to avoid queue deadlock
-                logger.debug("Stopping thread")
-                break
-
-            if isinstance(item, PipelineControlMessage):
-                logger.warning("%s: unexpected control message kind: %s", self.__class__.__name__, item.kind)
-                continue
-
-            typed_item = cast(InT, item)
-            if not self.should_process_input(typed_item):
-                continue
-
-            # Response events share the TTS queue with their audio. Forwarding
-            # them here preserves the model's exact text/tool/audio order.
-            if isinstance(item, PipelineEvent):
-                self.queue_out.put(cast(OutT, item))
-                continue
-
-            start_time = perf_counter()
-            try:
-                for output in self.process(typed_item):
-                    if not self.should_emit_output(output):
-                        start_time = perf_counter()
-                        continue
-                    self._times.append(perf_counter() - start_time)
-                    if self.should_log_timing(output):
-                        logger.log(self.timing_log_level, "%s: %.3f s", self.__class__.__name__, self.last_time)
-                    self.before_emit_output(output)
-                    queued_output = cast(
-                        OutT | PipelineControlMessage | bytes,
-                        self.output_for_queue(output, typed_item),
-                    )
-                    self.queue_out.put(queued_output)
-                    start_time = perf_counter()
-            except Exception as e:
-                logger.error(f"{self.__class__.__name__}: Error in process(): {type(e).__name__}: {e}", exc_info=True)
-
-        self.cleanup()
-        self.queue_out.put(PIPELINE_END)
+        self._begin_work("cleanup")
+        try:
+            self.cleanup()
+            self.queue_out.put(PIPELINE_END)
+        finally:
+            self._finish_work()
 
     @property
     def last_time(self) -> float:
-        return self._times[-1]
+        return self._last_time
 
     @property
     def min_time_to_debug(self) -> float:

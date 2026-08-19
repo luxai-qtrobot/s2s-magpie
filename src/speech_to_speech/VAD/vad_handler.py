@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import math
+import os
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from queue import Queue
 from threading import Event
 from typing import Any, TypeAlias
@@ -60,12 +63,13 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
         self,
         should_listen: Event,
         speculative_turns: SpeculativeTurnTracker,
+        silero_model_path: str | None = None,
         thresh: float = 0.6,
         sample_rate: int = 16000,
         min_silence_ms: int = 64,
         min_speech_ms: int = 384,
         min_speech_continuation_ms: int = 192,
-        max_speech_ms: float = float("inf"),
+        max_speech_ms: float = 30_000.0,
         speech_pad_ms: int = 30,
         audio_enhancement: bool = False,
         enable_realtime_transcription: bool = False,
@@ -76,6 +80,9 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
         short_segment_merge_ms: int = 0,
         smart_turn: bool = True,
         smart_turn_model_path: str | None = None,
+        smart_turn_model_revision: str | None = None,
+        smart_turn_cache_dir: str | None = None,
+        smart_turn_local_files_only: bool = True,
         smart_turn_threshold: float = 0.5,
         smart_turn_max_wait_ms: int = 2000,
         smart_turn_incomplete_delay_ms: int = 600,
@@ -89,6 +96,8 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
             self.min_speech_ms,
             min_speech_continuation_ms,
         )
+        if math.isnan(max_speech_ms) or max_speech_ms <= 0:
+            raise ValueError(f"max_speech_ms must be greater than 0, got {max_speech_ms}")
         self.max_speech_ms = max_speech_ms
         self.enable_realtime_transcription = enable_realtime_transcription
         self.realtime_processing_pause = realtime_processing_pause
@@ -111,6 +120,9 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
 
             self.smart_turn_analyzer = SmartTurnAnalyzer(
                 model_path=smart_turn_model_path,
+                model_revision=smart_turn_model_revision,
+                cache_dir=smart_turn_cache_dir,
+                local_files_only=smart_turn_local_files_only,
                 threshold=smart_turn_threshold,
                 cpu_count=smart_turn_cpu_count,
             )
@@ -119,18 +131,14 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
             unanswered_reopen_ms,
             self.smart_turn_max_wait_ms if smart_turn else 0,
         )
-        self.model, _ = torch.hub.load(
-            "snakers4/silero-vad:master",
-            "silero_vad",
-            trust_repo=True,
-            skip_validation=True,
-        )
+        self.model = self._load_silero_model(silero_model_path)
         self.iterator = VADIterator(
             self.model,
             threshold=thresh,
             sampling_rate=sample_rate,
             min_silence_duration_ms=min_silence_ms,
             speech_pad_ms=speech_pad_ms,
+            max_speech_duration_ms=max_speech_ms,
         )
         self.audio_enhancement = audio_enhancement
         if audio_enhancement:
@@ -164,6 +172,28 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
         self._last_final_audio_ms: int | None = None
         self._pending_reopen_candidate: tuple[str, int, int] | None = None
         self._pending_short_segment: _PendingShortSegment | None = None
+        self._turn_audio_trim_warned = False
+
+    @staticmethod
+    def _load_silero_model(model_path: str | None) -> Any:
+        """Load Silero from an explicit checkpoint or its pinned wheel; never from GitHub."""
+
+        if model_path and model_path.strip():
+            resolved_path = Path(os.path.expandvars(model_path)).expanduser().resolve()
+            if not resolved_path.is_file():
+                raise FileNotFoundError(f"Silero VAD checkpoint not found: {resolved_path}")
+            logger.info("Loading Silero VAD from local checkpoint %s", resolved_path)
+            return torch.jit.load(str(resolved_path), map_location="cpu").eval()
+
+        try:
+            from silero_vad import load_silero_vad
+        except ImportError as exc:
+            raise ImportError(
+                "Silero VAD requires the pinned `silero-vad` package. Install project dependencies before startup."
+            ) from exc
+
+        logger.info("Loading Silero VAD from the installed silero-vad package")
+        return load_silero_vad(onnx=False)
 
     @property
     def _audio_ms(self) -> int:
@@ -210,6 +240,7 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
         self._speculative_raw_audio_prefix = None
         self._last_final_wall_time = None
         self._last_final_audio_ms = None
+        self._turn_audio_trim_warned = False
         self.speculative_turns.observe(self._current_turn_id, self._current_turn_revision)
         return self._current_turn_id, self._current_turn_revision
 
@@ -357,14 +388,40 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
         return self._current_turn_id, self._current_turn_revision
 
     def _combined_turn_audio(self, current_segment: np.ndarray) -> np.ndarray:
-        if self._speculative_audio_prefix is None:
-            return current_segment
-        return np.concatenate((self._speculative_audio_prefix, current_segment))
+        return self._bounded_turn_concat(self._speculative_audio_prefix, current_segment)
 
     def _combined_raw_turn_audio(self, current_segment: np.ndarray) -> np.ndarray:
-        if self._speculative_raw_audio_prefix is None:
-            return current_segment.copy()
-        return np.concatenate((self._speculative_raw_audio_prefix, current_segment))
+        return self._bounded_turn_concat(self._speculative_raw_audio_prefix, current_segment)
+
+    def _bounded_turn_concat(self, prefix: np.ndarray | None, current_segment: np.ndarray) -> np.ndarray:
+        """Combine speculative turn audio without retaining an unbounded turn."""
+
+        if not math.isfinite(self.max_speech_ms):
+            if prefix is None:
+                return current_segment
+            return np.concatenate((prefix, current_segment))
+
+        max_samples = max(1, int(self.sample_rate * self.max_speech_ms / 1000))
+        prefix_samples = 0 if prefix is None else len(prefix)
+        total_samples = prefix_samples + len(current_segment)
+        if total_samples <= max_samples:
+            if prefix is None:
+                return current_segment
+            return np.concatenate((prefix, current_segment))
+
+        if not self._turn_audio_trim_warned:
+            logger.warning(
+                "VAD: trimming retained speculative turn audio from %.0fms to configured %.0fms bound",
+                total_samples / self.sample_rate * 1000,
+                self.max_speech_ms,
+            )
+            self._turn_audio_trim_warned = True
+
+        if len(current_segment) >= max_samples:
+            return current_segment[-max_samples:].copy()
+        assert prefix is not None
+        prefix_samples_to_keep = max_samples - len(current_segment)
+        return np.concatenate((prefix[-prefix_samples_to_keep:], current_segment))
 
     def _short_segment_merge_window_ms(self) -> int:
         return int(getattr(self, "short_segment_merge_ms", 0))
@@ -652,6 +709,7 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
 
         # Handle end of speech
         if vad_output is not None:
+            forced_split = bool(getattr(self.iterator, "last_utterance_forced", False))
             if len(vad_output) == 0:
                 logger.info("VAD: phantom trigger (empty buffer), closing speech pair")
                 if self._speech_started_emitted and self.text_output_queue:
@@ -687,7 +745,10 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
             duration_ms = self._segment_duration_ms(array)
             min_active_ms = 0.0 if self._speech_started_emitted else self._active_speech_min_ms(start_ms)
 
-            duration_exceeds_limit = duration_ms > self.max_speech_ms
+            # A forced boundary is the configured safety mechanism, not an
+            # invalid overlong utterance. Chunk granularity and speech padding
+            # can make it slightly longer than the exact configured duration.
+            duration_exceeds_limit = duration_ms > self.max_speech_ms and not forced_split
             if active_speech_duration_ms < min_active_ms or duration_exceeds_limit:
                 if (
                     self._short_segment_merge_window_ms() > 0
@@ -739,14 +800,21 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
                     turn_id, turn_revision = self._current_turn_metadata()
                 self._log_speech_ends += 1
                 logger.info(
-                    "Speech soft-ended (segment=%.0fms, active=%.0fms, turn=%s rev=%s)",
+                    "Speech %s-ended (segment=%.0fms, active=%.0fms, turn=%s rev=%s)",
+                    "forced" if forced_split else "soft",
                     duration_ms,
                     active_speech_duration_ms,
                     turn_id,
                     turn_revision,
                 )
                 analysis_audio = self._combined_raw_turn_audio(array)
-                reopen_grace_ms, processing_delay_ms = self._smart_turn_timing_ms(analysis_audio)
+                if forced_split:
+                    # The cap is a resource boundary, not a semantic end of
+                    # turn. Do not run completion analysis or allow the next
+                    # continuous segment to reopen and concatenate this audio.
+                    reopen_grace_ms, processing_delay_ms = 0, 0
+                else:
+                    reopen_grace_ms, processing_delay_ms = self._smart_turn_timing_ms(analysis_audio)
                 if self.audio_enhancement:
                     array = self._apply_audio_enhancement(array)
                 output_array = self._combined_turn_audio(array)
@@ -760,18 +828,31 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
                             turn_revision=turn_revision,
                         )
                     )
-                self._speculative_audio_prefix = output_array
-                self._speculative_raw_audio_prefix = analysis_audio
-                self._last_final_wall_time = time.time()
-                self._last_final_audio_ms = end_ms
-                # The grace only delays response commits. Resumed speech
-                # follows the existing candidate/revision flow and makes
-                # this revision stale before assistant output is released.
-                self.speculative_turns.start_reopen_grace(
-                    turn_id,
-                    turn_revision,
-                    reopen_grace_ms / 1000.0,
-                )
+                if forced_split:
+                    self._cancel_pending_reopen()
+                    self._speculative_audio_prefix = None
+                    self._speculative_raw_audio_prefix = None
+                    self._last_final_wall_time = None
+                    self._last_final_audio_ms = None
+                    # Leave the emitted segment's metadata intact on its
+                    # message, while ensuring continued speech starts a fresh
+                    # bounded turn on the next audio chunk.
+                    self._current_turn_id = None
+                    self._current_turn_revision = None
+                    self._turn_audio_trim_warned = False
+                else:
+                    self._speculative_audio_prefix = output_array
+                    self._speculative_raw_audio_prefix = analysis_audio
+                    self._last_final_wall_time = time.time()
+                    self._last_final_audio_ms = end_ms
+                    # The grace only delays response commits. Resumed speech
+                    # follows the existing candidate/revision flow and makes
+                    # this revision stale before assistant output is released.
+                    self.speculative_turns.start_reopen_grace(
+                        turn_id,
+                        turn_revision,
+                        reopen_grace_ms / 1000.0,
+                    )
                 yield VADAudio(
                     audio=output_array,
                     runtime_config=runtime_config,
@@ -835,6 +916,7 @@ class VADHandler(BaseHandler[VADIn, VADOut]):
         self._last_final_wall_time = None
         self._last_final_audio_ms = None
         self._pending_reopen_candidate = None
+        self._turn_audio_trim_warned = False
         self.speculative_turns.reset()
         self.should_listen.set()
         logger.debug("VAD session state reset")

@@ -294,6 +294,7 @@ class ChatCompletionsApiModelHandler(BaseOpenAICompatibleHandler):
                 {"role": "system", "content": "You are a helpful assistant"},
                 {"role": "user", "content": "Hello"},
             ],
+            max_tokens=min(8, self.max_output_tokens),
             extra_body=self._extra_body,
             timeout=self.request_timeout,
         )
@@ -314,6 +315,7 @@ class ChatCompletionsApiModelHandler(BaseOpenAICompatibleHandler):
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
+                max_tokens=self.max_output_tokens,
                 extra_body=extra_body,
                 timeout=timeout,
             )

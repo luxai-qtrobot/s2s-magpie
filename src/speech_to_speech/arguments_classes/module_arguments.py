@@ -59,6 +59,19 @@ class ModuleArguments:
         default=0.5,
         metadata={"help": "Update interval for live transcription in seconds (default: 0.5s = 500ms)"},
     )
+    pipeline_queue_max_items: int = field(
+        default=256,
+        metadata={
+            "help": "Maximum item count for each in-process pipeline queue. "
+            "Realtime PCM uses a latest-wins policy at this bound; other stages apply backpressure."
+        },
+    )
+    handler_stall_timeout_seconds: float = field(
+        default=180.0,
+        metadata={
+            "help": "Fail the service when a handler is processing without making progress for this many seconds."
+        },
+    )
     live_transcription_min_silence_ms: int = field(
         default=500,
         metadata={

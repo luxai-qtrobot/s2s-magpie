@@ -20,7 +20,7 @@ from speech_to_speech.s2s_pipeline import (
     prepare_all_args,
     setup_logger,
 )
-from speech_to_speech.utils.thread_manager import ThreadManager
+from speech_to_speech.utils.thread_manager import HandlerThreadError, HandlerThreadFailure, ThreadManager
 
 from .host import MagpieSessionHost
 from .protocol import (
@@ -95,6 +95,16 @@ def _advertise_discovery(parameters: Any) -> ZconfDiscovery:
     return discovery
 
 
+async def _wait_for_handler_failure(manager: ThreadManager) -> HandlerThreadFailure:
+    """Poll worker health without blocking the asyncio transport loop."""
+
+    while True:
+        failure = manager.check_health()
+        if failure is not None:
+            return failure
+        await asyncio.sleep(0.1)
+
+
 async def _serve(
     args: ParsedArguments,
     parameters: Any,
@@ -109,7 +119,10 @@ async def _serve(
         llm_backend=args.llm_backend,
         tts_backend=args.tts_backend,
     )
-    manager = ThreadManager(unit.handlers)
+    manager = ThreadManager(
+        unit.handlers,
+        stall_timeout=float(args.module_kwargs.handler_stall_timeout_seconds),
+    )
     host = MagpieSessionHost(unit, stop_event, parameters)
     discovery: ZconfDiscovery | None = None
     shutdown_requested = asyncio.Event()
@@ -144,8 +157,12 @@ async def _serve(
             shutdown_requested.wait(),
             name="magpie-s2s-shutdown-wait",
         )
+        handler_failure_wait = asyncio.create_task(
+            _wait_for_handler_failure(manager),
+            name="magpie-s2s-handler-health",
+        )
         done, pending = await asyncio.wait(
-            {host_wait, shutdown_wait},
+            {host_wait, shutdown_wait, handler_failure_wait},
             return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
@@ -153,6 +170,8 @@ async def _serve(
         await asyncio.gather(*pending, return_exceptions=True)
         if host_wait in done:
             host_wait.result()
+        if handler_failure_wait in done and shutdown_wait not in done:
+            raise HandlerThreadError(handler_failure_wait.result())
     finally:
         Logger.info("Stopping LuxAI S2S MAGPIE...")
         if discovery is not None:

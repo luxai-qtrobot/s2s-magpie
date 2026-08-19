@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "huggingface": {
+    "smart_turn_v3_2_cpu": {
+      "repo_id": "pipecat-ai/smart-turn-v3",
+      "revision": "f766f81d3cfdf7737ac64aad813d91bbfd56bf93",
+      "files": [
+        "smart-turn-v3.2-cpu.onnx"
+      ]
+    },
+    "parakeet_tdt_0_6b_v3": {
+      "repo_id": "nvidia/parakeet-tdt-0.6b-v3",
+      "revision": "b51b7dc0fbf7f266a97880fb4b626c56d28f4b96",
+      "files": [
+        "parakeet-tdt-0.6b-v3.nemo"
+      ]
+    },
+    "qwen3_tts_0_6b_custom_voice": {
+      "repo_id": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+      "revision": "85e237c12c027371202489a0ec509ded67b5e4b5"
+    }
+  },
+  "nltk": {
+    "punkt_tab": {
+      "resource": "tokenizers/punkt_tab",
+      "subdir": "tokenizers",
+      "url": "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt_tab.zip",
+      "sha256": "e57f64187974277726a3417ca6f181ec5403676c717672eef6a748a7b20e0106"
+    }
+  },
+  "python_packages": {
+    "nano-parakeet": "0.2.1",
+    "faster-qwen3-tts": "0.3.2",
+    "silero-vad": "6.2.1"
+  }
+}

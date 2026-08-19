@@ -26,6 +26,7 @@ from rich.console import Console
 
 from speech_to_speech.api.openai_realtime.runtime_config import RuntimeConfig
 from speech_to_speech.baseHandler import BaseHandler
+from speech_to_speech.model_assets import locked_huggingface_asset, resolve_huggingface_snapshot
 from speech_to_speech.pipeline.cancel_scope import CancelScope
 from speech_to_speech.pipeline.control import SESSION_END, is_control_message
 from speech_to_speech.pipeline.events import AssistantOutputEvent
@@ -107,6 +108,9 @@ class Qwen3TTSHandler(BaseHandler[TTSIn, TTSOut]):
         self,
         should_listen: Event,
         model_name: str = DEFAULT_MODEL,
+        model_revision: str | None = None,
+        cache_dir: str | Path | None = None,
+        local_files_only: bool = True,
         device: str = "cuda",
         dtype: str | torch.dtype = "auto",
         attn_implementation: str = "eager",
@@ -184,13 +188,27 @@ class Qwen3TTSHandler(BaseHandler[TTSIn, TTSOut]):
         else:
             self.device = device
             self.model_name = model_name
+            locked_asset = locked_huggingface_asset("qwen3_tts_0_6b_custom_voice")
+            resolved_model_path = resolve_huggingface_snapshot(
+                model_name,
+                revision=model_revision
+                or (str(locked_asset["revision"]) if model_name == locked_asset["repo_id"] else None),
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+            )
+            if self.faster_backend == "ggml" and local_files_only and not self.gguf_talker_path:
+                raise RuntimeError(
+                    "Offline Qwen3-TTS GGML startup requires qwen3_tts_gguf_talker_path and "
+                    "qwen3_tts_gguf_codec_path. Provision those GGUF files explicitly."
+                )
             logger.info(
-                "Loading Qwen3-TTS model: %s via faster-qwen3-tts (%s backend)",
+                "Loading Qwen3-TTS model: %s (resolved to %s) via faster-qwen3-tts (%s backend)",
                 self.model_name,
+                resolved_model_path,
                 self.faster_backend,
             )
             self._setup_faster(
-                model_name=self.model_name,
+                model_name=str(resolved_model_path),
                 dtype=dtype,
                 attn_implementation=attn_implementation,
                 backend=self.faster_backend,

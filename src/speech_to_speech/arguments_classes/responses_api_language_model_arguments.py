@@ -35,6 +35,19 @@ class ResponsesApiLanguageModelHandlerArguments(LanguageModelBaseArguments):
             "For Together Qwen3.5 models this sends chat_template_kwargs.enable_thinking=false."
         },
     )
+    responses_api_max_output_tokens: int = field(
+        default=256,
+        metadata={
+            "help": "Hard maximum number of output tokens for text LLM requests. "
+            "A per-response limit may lower, but never raise, this ceiling. Default is 256."
+        },
+    )
+    responses_api_request_timeout_s: float = field(
+        default=20.0,
+        metadata={
+            "help": "OpenAI-compatible provider I/O timeout in seconds. Default is 20.0."
+        },
+    )
     responses_api_audio_max_tokens: int = field(
         default=256,
         metadata={"help": "Maximum chat completion tokens for audio-input LLM requests. Default is 256."},

@@ -3,6 +3,12 @@ from dataclasses import dataclass, field
 
 @dataclass
 class VADHandlerArguments:
+    silero_model_path: str | None = field(
+        default=None,
+        metadata={
+            "help": "Optional local Silero VAD TorchScript checkpoint. When omitted, the model bundled with the pinned silero-vad package is used without network access."
+        },
+    )
     thresh: float = field(
         default=0.6,
         metadata={
@@ -34,9 +40,10 @@ class VADHandlerArguments:
         },
     )
     max_speech_ms: float = field(
-        default=float("inf"),
+        default=30_000.0,
         metadata={
-            "help": "Maximum length of continuous speech before forcing a split. Default is infinite, allowing for uninterrupted speech segments."
+            "help": "Maximum retained continuous-speech duration before forcing a safe segment boundary. "
+            "Default is 30000 ms."
         },
     )
     speech_pad_ms: int = field(
@@ -88,8 +95,20 @@ class VADHandlerArguments:
     smart_turn_model_path: str | None = field(
         default=None,
         metadata={
-            "help": "Optional path to a Smart Turn v3.x CPU ONNX model. When omitted, the latest supported v3.2 CPU model is downloaded from pipecat-ai/smart-turn-v3."
+            "help": "Optional path to a Smart Turn v3.x CPU ONNX model. When omitted, the pinned v3.2 model must already exist in the configured Hugging Face cache."
         },
+    )
+    smart_turn_model_revision: str | None = field(
+        default=None,
+        metadata={"help": "Immutable Smart Turn Hugging Face revision. The bundled model lock is used when unset."},
+    )
+    smart_turn_cache_dir: str | None = field(
+        default=None,
+        metadata={"help": "Optional Hugging Face cache directory used to resolve the Smart Turn model."},
+    )
+    smart_turn_local_files_only: bool = field(
+        default=True,
+        metadata={"help": "Require Smart Turn to use pre-provisioned local files. Default is True."},
     )
     smart_turn_threshold: float = field(
         default=0.5,

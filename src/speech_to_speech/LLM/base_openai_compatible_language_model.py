@@ -4,6 +4,7 @@ import base64
 import io
 import ipaddress
 import logging
+import math
 import os
 import wave
 from abc import ABC, abstractmethod
@@ -165,6 +166,7 @@ class BaseOpenAICompatibleHandler(BaseHandler[LLMIn, LLMOut], ABC):
         speculative_turns: SpeculativeTurnTracker | None = None,
         disable_thinking: bool = True,
         reasoning_effort: Optional[str] = None,
+        max_output_tokens: int = 256,
         request_timeout_s: float = 20.0,
         stream_batch_sentences: int = 3,
         enable_lang_prompt: bool = False,
@@ -182,13 +184,16 @@ class BaseOpenAICompatibleHandler(BaseHandler[LLMIn, LLMOut], ABC):
         self.stream_batch_sentences = max(1, stream_batch_sentences)
         self.enable_lang_prompt = enable_lang_prompt
         self.gen_kwargs = dict(gen_kwargs)
-        self.audio_max_tokens = audio_max_tokens
+        self.max_output_tokens = max(1, int(max_output_tokens))
+        self.audio_max_tokens = max(1, int(audio_max_tokens))
         self.audio_temperature = audio_temperature
         if audio_content_type not in {"input_audio", "audio_url"}:
             raise ValueError("audio_content_type must be either 'input_audio' or 'audio_url'.")
         self.audio_content_type = audio_content_type
         self.audio_history_turns = max(0, audio_history_turns)
         self.request_timeout_s = float(request_timeout_s)
+        if not math.isfinite(self.request_timeout_s) or self.request_timeout_s <= 0:
+            raise ValueError("request_timeout_s must be finite and greater than zero.")
         self.request_timeout = httpx.Timeout(
             self.request_timeout_s,
             connect=min(10.0, self.request_timeout_s),
@@ -319,10 +324,46 @@ class BaseOpenAICompatibleHandler(BaseHandler[LLMIn, LLMOut], ABC):
     ) -> dict[str, Any]:
         """Build audio request parameters in the selected backend's shape."""
         kwargs = self._build_optional_kwargs(req_tools, req_tool_choice)
-        max_tokens = getattr(response, "max_output_tokens", None) if response is not None else None
-        kwargs.setdefault("max_tokens", max_tokens or self.audio_max_tokens)
+        kwargs.setdefault(
+            "max_tokens",
+            self._bounded_output_tokens(response, self.audio_max_tokens),
+        )
         kwargs.setdefault("temperature", self.audio_temperature)
         return kwargs
+
+    @staticmethod
+    def _bounded_output_tokens(response: Any, configured_limit: int) -> int:
+        """Resolve a request limit without allowing clients to raise the service cap."""
+
+        requested = getattr(response, "max_output_tokens", None) if response is not None else None
+        if requested is None or str(requested).lower() == "inf":
+            return configured_limit
+        try:
+            requested_limit = int(requested)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"Invalid max_output_tokens value: {requested!r}") from exc
+        return min(max(1, requested_limit), configured_limit)
+
+    def _build_text_optional_kwargs(
+        self,
+        response: Any,
+        req_tools: Any,
+        req_tool_choice: Any,
+    ) -> dict[str, Any]:
+        """Build bounded text-generation parameters for the selected API."""
+
+        kwargs = self._build_optional_kwargs(req_tools, req_tool_choice)
+        kwargs.setdefault(
+            self._text_token_limit_parameter,
+            self._bounded_output_tokens(response, self.max_output_tokens),
+        )
+        return kwargs
+
+    @property
+    def _text_token_limit_parameter(self) -> str:
+        """Provider parameter used to bound a normal text request."""
+
+        return "max_tokens"
 
     def _request_audio(self, api_input: Any, optional_kwargs: dict[str, Any]) -> Any:
         return self._request(api_input, optional_kwargs)
@@ -1093,7 +1134,11 @@ class BaseOpenAICompatibleHandler(BaseHandler[LLMIn, LLMOut], ABC):
         if lang_name and self.enable_lang_prompt:
             active_chat.add_item(make_user_message(f"Please reply to my message in {lang_name}."))
 
-        optional_kwargs = self._build_optional_kwargs(req_tools, req_tool_choice)
+        optional_kwargs = self._build_text_optional_kwargs(
+            response,
+            req_tools,
+            req_tool_choice,
+        )
 
         # CancelScope.is_stale(gen) is checked when the stream iterator advances; a
         # blocked read inside httpx cannot be aborted by cancel_scope.cancel() from
