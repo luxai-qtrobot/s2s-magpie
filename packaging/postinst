@@ -63,13 +63,14 @@ case "${1:-}" in
         ;;
 esac
 
+FIRST_INSTALL=0
 WAS_ENABLED=0
 WAS_ACTIVE=0
 WAS_MASKED=0
 if [ -z "${2:-}" ]; then
-    # Match the other QTrobot service packages on a clean installation.
-    WAS_ENABLED=1
-    WAS_ACTIVE=1
+    # This is an optional, GPU-heavy service whose selected LLM backend may
+    # need separate setup. A fresh installation is provisioned but inactive.
+    FIRST_INSTALL=1
 else
     if [ -e "$UPGRADE_STATE_DIR/enabled" ] || systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
         WAS_ENABLED=1
@@ -141,6 +142,12 @@ if [ "$ASSETS_READY" -eq 1 ]; then
         systemctl restart "$SERVICE"
     else
         systemctl stop "$SERVICE" 2>/dev/null || true
+    fi
+    if [ "$FIRST_INSTALL" -eq 1 ]; then
+        echo
+        echo "LuxAI S2S MAGPIE is installed and provisioned but has not been enabled or started."
+        echo "After configuring and starting the selected LLM backend, run:"
+        echo "  sudo systemctl enable --now $SERVICE"
     fi
 else
     systemctl stop "$SERVICE" 2>/dev/null || true

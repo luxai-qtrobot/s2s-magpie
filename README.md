@@ -74,8 +74,16 @@ pinned models under `/opt/luxai/s2s-magpie/models`. Therefore the first
 installation requires network access and several gigabytes of free space.
 
 The runtime configuration is preserved by dpkg at
-`/opt/luxai/s2s-magpie/config/config.yaml`. If model provisioning cannot finish,
-the package remains installed but the service stays disabled. Retry it with:
+`/opt/luxai/s2s-magpie/config/config.yaml`. A fresh installation intentionally
+leaves the service disabled and stopped. After configuring its LLM backend,
+start it explicitly with:
+
+```bash
+sudo systemctl enable --now luxai-s2s-magpie
+```
+
+If model provisioning cannot finish, the package remains installed and the
+service stays disabled. Retry it with:
 
 ```bash
 sudo /opt/luxai/s2s-magpie/bin/luxai-s2s-magpie-provision
@@ -84,6 +92,18 @@ sudo systemctl enable --now luxai-s2s-magpie
 
 Use `systemctl status luxai-s2s-magpie` and `journalctl -u
 luxai-s2s-magpie -f` to inspect the service.
+
+The bundled configuration uses the local Chat Completions endpoint at
+`http://127.0.0.1:8080/v1`. On QTrobot, install and start the default local
+LLM service before starting S2S MAGPIE:
+
+```bash
+sudo apt install qtrobot-llama-cpp
+sudo systemctl start qtrobot-llama-cpp.service
+```
+
+`qtrobot-llama-cpp` is deliberately not a Debian dependency because S2S
+MAGPIE can instead be configured for another compatible LLM backend.
 
 ### Provision models before deployment
 
