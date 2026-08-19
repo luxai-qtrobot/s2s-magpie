@@ -79,6 +79,22 @@ def _prepare_pipeline(parameters: Any) -> ParsedArguments:
     return args
 
 
+def _advertise_discovery(parameters: Any) -> ZconfDiscovery:
+    """Create and advertise Zeroconf outside the asyncio event-loop thread."""
+
+    discovery = ZconfDiscovery()
+    try:
+        discovery.advertise_node(
+            str(parameters.zmq.node_id),
+            port=int(parameters.zmq.port),
+            payload={"version": str(parameters.service_version)},
+        )
+    except BaseException:
+        discovery.close()
+        raise
+    return discovery
+
+
 async def _serve(
     args: ParsedArguments,
     parameters: Any,
@@ -109,12 +125,9 @@ async def _serve(
     try:
         manager.start()
         await host.start()
-        discovery = ZconfDiscovery()
-        discovery.advertise_node(
-            str(parameters.zmq.node_id),
-            port=int(parameters.zmq.port),
-            payload={"version": str(parameters.service_version)},
-        )
+        # Zeroconf's synchronous API raises EventLoopBlocked when invoked from
+        # the asyncio loop that it needs to coordinate with internally.
+        discovery = await asyncio.to_thread(_advertise_discovery, parameters)
 
         base_port = int(parameters.zmq.port)
         Logger.info(
@@ -144,7 +157,7 @@ async def _serve(
         Logger.info("Stopping LuxAI S2S MAGPIE...")
         if discovery is not None:
             try:
-                discovery.close()
+                await asyncio.to_thread(discovery.close)
             except Exception as exc:
                 Logger.warning(f"Failed to close MAGPIE discovery cleanly: {exc}")
         host_stop = asyncio.create_task(host.stop(), name="magpie-s2s-host-stop")
