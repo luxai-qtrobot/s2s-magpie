@@ -15,6 +15,33 @@ cleanup_uv_cache() {
 }
 trap cleanup_uv_cache 0
 
+check_python_environment() {
+    CHECK_STATUS=0
+    CHECK_OUTPUT="$("$UV" pip check --color never --python "$VENV_DIR/bin/python" 2>&1)" || CHECK_STATUS=$?
+    if [ "$CHECK_STATUS" -eq 0 ]; then
+        printf '%s\n' "$CHECK_OUTPUT"
+        return 0
+    fi
+
+    # NVIDIA's official 0.8.1 ARM64 wheel is named manylinux2014_aarch64,
+    # but its internal WHEEL metadata declares an SBSA tag. uv correctly
+    # reports that metadata mismatch even though the payload is the vendor's
+    # supported ARM64 build. Permit only this exact, locked Jetson exception.
+    INCOMPATIBILITY_COUNT="$(printf '%s\n' "$CHECK_OUTPUT" | grep -c '^The package ' || true)"
+    if [ "$(uname -m)" = "aarch64" ] && \
+        [ "$INCOMPATIBILITY_COUNT" -eq 1 ] && \
+        printf '%s\n' "$CHECK_OUTPUT" | grep -Fqx \
+            'The package `nvidia-cusparselt-cu13` was built for a different platform' && \
+        "$VENV_DIR/bin/python" -c \
+            'from importlib.metadata import distribution, version; wheel = distribution("nvidia-cusparselt-cu13").read_text("WHEEL") or ""; raise SystemExit(version("nvidia-cusparselt-cu13") != "0.8.1" or "_sbsa" not in wheel)'; then
+        echo "WARNING: accepting NVIDIA nvidia-cusparselt-cu13 0.8.1 ARM64/SBSA wheel-tag mismatch" >&2
+        return 0
+    fi
+
+    printf '%s\n' "$CHECK_OUTPUT" >&2
+    return "$CHECK_STATUS"
+}
+
 case "${1:-}" in
     configure)
         ;;
@@ -88,7 +115,7 @@ echo "Installing LuxAI S2S MAGPIE dependencies..."
 "$UV" pip sync --python "$VENV_DIR/bin/python" "$LOCK_FILE"
 "$UV" pip install --python "$VENV_DIR/bin/python" \
     --no-deps --force-reinstall "$WHEEL_FILE"
-"$UV" pip check --python "$VENV_DIR/bin/python"
+check_python_environment
 
 ASSETS_READY=0
 if "$INSTALL_DIR/bin/luxai-s2s-magpie-provision" --verify-only; then
