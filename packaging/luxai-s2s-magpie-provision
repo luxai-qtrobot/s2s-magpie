@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+INSTALL_DIR=/opt/luxai/s2s-magpie
+
+if [ ! -x "$INSTALL_DIR/.venv/bin/python" ]; then
+    echo "LuxAI S2S MAGPIE virtual environment is not installed" >&2
+    exit 1
+fi
+
+export HF_HUB_CACHE="$INSTALL_DIR/models/huggingface"
+export NLTK_DATA="$INSTALL_DIR/models/nltk_data"
+
+exec "$INSTALL_DIR/.venv/bin/luxai-s2s-magpie-provision" \
+    --hf-cache "$HF_HUB_CACHE" \
+    --nltk-data "$NLTK_DATA" \
+    "$@"

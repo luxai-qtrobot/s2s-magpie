@@ -1,0 +1,26 @@
+[Unit]
+Description=LuxAI MAGPIE Speech-to-Speech Service
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/luxai/s2s-magpie
+ExecStartPre=/opt/luxai/s2s-magpie/bin/luxai-s2s-magpie-provision --verify-only
+ExecStart=/opt/luxai/s2s-magpie/bin/luxai-s2s-magpie
+Environment="HF_HUB_OFFLINE=1"
+Environment="TRANSFORMERS_OFFLINE=1"
+Environment="HF_HUB_CACHE=/opt/luxai/s2s-magpie/models/huggingface"
+Environment="NLTK_DATA=/opt/luxai/s2s-magpie/models/nltk_data"
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+FinalKillSignal=SIGKILL
+
+[Install]
+WantedBy=multi-user.target

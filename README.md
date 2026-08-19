@@ -42,16 +42,11 @@ while retaining clear provenance for future upstream updates.
 
 ## Install
 
-Create a dedicated environment, install the known-good CUDA-enabled
-Torch/Torchaudio builds for the robot's JetPack and Python versions, then
-install the service with its model-loader constraints. JetPack 7 does not
-currently have a separate NVIDIA Jetson Torch distribution, so preserve the
-exact CUDA build qualified on the target robot.
+Create a dedicated environment and install the project:
 
 ```bash
-python3 -m venv .venv
+uv venv .venv
 source .venv/bin/activate
-# Install the target-qualified Torch/Torchaudio builds here first.
 uv pip install .
 ```
 
@@ -62,6 +57,33 @@ the same environment; two distributions must not own that import namespace.
 FastAPI, Uvicorn, WebSocket, WebRTC, aiortc, and local PortAudio dependencies
 are not required. Qwen3-TTS uses its Torch backend by default; install
 `.[qwen-ggml]` only when a compatible qwentts.cpp build is actually desired.
+
+### Debian package
+
+Build the thin ARM64 package on the target Jetson:
+
+```bash
+bash packaging/build_deb.sh
+sudo apt install ./luxai-s2s-magpie_*.deb
+```
+
+The package itself does not contain the large Python environment or model
+files. During installation it creates `/opt/luxai/s2s-magpie/.venv`, installs
+the versions captured in `requirements-jetson.lock.txt`, and provisions the
+pinned models under `/opt/luxai/s2s-magpie/models`. Therefore the first
+installation requires network access and several gigabytes of free space.
+
+The runtime configuration is preserved by dpkg at
+`/opt/luxai/s2s-magpie/config/config.yaml`. If model provisioning cannot finish,
+the package remains installed but the service stays disabled. Retry it with:
+
+```bash
+sudo /opt/luxai/s2s-magpie/bin/luxai-s2s-magpie-provision
+sudo systemctl enable --now luxai-s2s-magpie
+```
+
+Use `systemctl status luxai-s2s-magpie` and `journalctl -u
+luxai-s2s-magpie -f` to inspect the service.
 
 ### Provision models before deployment
 
@@ -93,14 +115,6 @@ wrong cache fails at startup with a provisioning error instead of silently
 using the network. A custom model must be supplied as a local path or paired
 with an immutable revision. Offline GGML Qwen deployments additionally need
 explicit local talker and codec GGUF paths.
-
-Because NVIDIA's Jetson Torch wheels are tied to JetPack and Python, a single
-portable full lock would be misleading. After validating one robot image,
-capture that environment alongside the image metadata:
-
-```bash
-uv pip freeze --strict --exclude-editable > requirements-jetson.lock.txt
-```
 
 ## Configuration and run
 

@@ -57,7 +57,7 @@ def _provisioning_error(kind: str, model: str, revision: str | None) -> RuntimeE
     revision_text = f" at revision {revision}" if revision else ""
     return RuntimeError(
         f"Locked {kind} asset {model!r}{revision_text} is not available locally. "
-        "Run `python scripts/provision_assets.py` with network access, then start "
+        "Run `luxai-s2s-magpie-provision` with network access, then start "
         "the service with the same Hugging Face cache."
     )
 
@@ -153,7 +153,7 @@ def require_nltk_assets() -> None:
         joined = ", ".join(missing)
         raise RuntimeError(
             f"Missing required NLTK assets: {joined}. Run "
-            "`python scripts/provision_assets.py` before starting the service."
+            "`luxai-s2s-magpie-provision` before starting the service."
         )
 
 

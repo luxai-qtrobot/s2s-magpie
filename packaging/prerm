@@ -1,0 +1,32 @@
+#!/bin/sh
+set -e
+
+SERVICE=luxai-s2s-magpie.service
+UPGRADE_STATE_DIR=/run/luxai-s2s-magpie-package
+
+case "${1:-remove}" in
+    upgrade)
+        rm -rf -- "$UPGRADE_STATE_DIR"
+        mkdir -p "$UPGRADE_STATE_DIR"
+        ENABLE_STATE="$(systemctl is-enabled "$SERVICE" 2>/dev/null || true)"
+        if [ "$ENABLE_STATE" = "masked" ]; then
+            : > "$UPGRADE_STATE_DIR/masked"
+        elif systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
+            : > "$UPGRADE_STATE_DIR/enabled"
+        fi
+        if systemctl is-active --quiet "$SERVICE" 2>/dev/null; then
+            : > "$UPGRADE_STATE_DIR/active"
+        fi
+        systemctl stop "$SERVICE" 2>/dev/null || true
+        ;;
+    remove|deconfigure)
+        rm -rf -- "$UPGRADE_STATE_DIR"
+        systemctl stop "$SERVICE" 2>/dev/null || true
+        systemctl disable "$SERVICE" 2>/dev/null || true
+        ;;
+    failed-upgrade)
+        systemctl stop "$SERVICE" 2>/dev/null || true
+        ;;
+esac
+
+exit 0

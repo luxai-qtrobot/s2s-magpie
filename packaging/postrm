@@ -1,0 +1,29 @@
+#!/bin/sh
+set -e
+
+INSTALL_DIR=/opt/luxai/s2s-magpie
+UPGRADE_STATE_DIR=/run/luxai-s2s-magpie-package
+
+case "${1:-remove}" in
+    remove)
+        rm -rf -- "$INSTALL_DIR/.venv"
+        rm -rf -- "$INSTALL_DIR/.uv-cache"
+        rm -rf -- "$UPGRADE_STATE_DIR"
+        ;;
+    purge)
+        rm -rf -- "$INSTALL_DIR/.venv"
+        rm -rf -- "$INSTALL_DIR/.uv-cache"
+        rm -rf -- "$INSTALL_DIR/models"
+        rm -rf -- "$UPGRADE_STATE_DIR"
+        rmdir "$INSTALL_DIR/config" 2>/dev/null || true
+        rmdir "$INSTALL_DIR/packages" 2>/dev/null || true
+        rmdir "$INSTALL_DIR/bin" 2>/dev/null || true
+        rmdir "$INSTALL_DIR" 2>/dev/null || true
+        ;;
+esac
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload 2>/dev/null || true
+fi
+
+exit 0

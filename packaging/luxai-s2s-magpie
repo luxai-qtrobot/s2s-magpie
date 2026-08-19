@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+INSTALL_DIR=/opt/luxai/s2s-magpie
+
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_CACHE="$INSTALL_DIR/models/huggingface"
+export NLTK_DATA="$INSTALL_DIR/models/nltk_data"
+
+exec "$INSTALL_DIR/.venv/bin/luxai-s2s-magpie" \
+    "$INSTALL_DIR/config/config.yaml" "$@"

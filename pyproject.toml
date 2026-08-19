@@ -79,6 +79,7 @@ Issues = "https://github.com/luxai-qtrobot/s2s-magpie/issues"
 
 [project.scripts]
 luxai-s2s-magpie = "luxai.s2s_magpie.cli:main"
+luxai-s2s-magpie-provision = "luxai.s2s_magpie.provision:main"
 s2s-magpie = "luxai.s2s_magpie.cli:main"
 
 [tool.setuptools.packages.find]
