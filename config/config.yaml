@@ -1,0 +1,278 @@
+name: luxai-s2s-magpie
+description: MAGPIE-native speech-to-speech service for QTrobot
+
+parameters:
+
+  # ---- Service ----
+  - name: log_level
+    type: string
+    value: INFO
+    description: "Log verbosity: DEBUG, INFO, WARN, ERROR"
+    scope: cli
+
+  - name: service_version
+    type: string
+    value: "0.1.0"
+
+  # ---- Session and realtime turn handling ----
+  - name: session
+    type: group
+    description: S2S session behavior
+    parameters:
+      - name: enable_live_transcription
+        type: bool
+        value: true
+        description: Emit partial transcription updates while the user speaks
+
+      - name: live_transcription_update_interval
+        type: double
+        value: 0.5
+        description: Partial transcription update interval in seconds
+
+      - name: shutdown_drain_timeout_seconds
+        type: double
+        value: 15.0
+        description: Grace period for draining an active session at shutdown
+
+      - name: forced_shutdown_timeout_seconds
+        type: double
+        value: 3.0
+        description: Final wait after forcing the pipeline to stop
+
+  # ---- Voice activity and turn completion ----
+  - name: vad
+    type: group
+    description: Voice activity detection and Smart Turn settings
+    parameters:
+      - name: thresh
+        type: double
+        value: 0.6
+
+      - name: min_silence_ms
+        type: int
+        value: 64
+
+      - name: min_speech_ms
+        type: int
+        value: 384
+
+      - name: min_speech_continuation_ms
+        type: int
+        value: 192
+
+      - name: speech_pad_ms
+        type: int
+        value: 500
+
+      - name: audio_enhancement
+        type: bool
+        value: false
+
+      - name: speculative_reopen_ms
+        type: int
+        value: 800
+
+      - name: unanswered_reopen_ms
+        type: int
+        value: 7000
+
+      - name: short_segment_merge_ms
+        type: int
+        value: 0
+
+      - name: smart_turn
+        type: bool
+        value: true
+
+      - name: smart_turn_threshold
+        type: double
+        value: 0.5
+
+      - name: smart_turn_max_wait_ms
+        type: int
+        value: 2000
+
+      - name: smart_turn_incomplete_delay_ms
+        type: int
+        value: 600
+
+      - name: smart_turn_cpu_count
+        type: int
+        value: 1
+
+  # ---- Speech recognition ----
+  - name: stt
+    type: group
+    description: Selected STT backend and its parameters
+    parameters:
+      - name: backend
+        type: string
+        value: parakeet-tdt
+        scope: cli
+
+      - name: model_name
+        type: string
+        value: nvidia/parakeet-tdt-0.6b-v3
+        scope: cli
+
+      - name: device
+        type: string
+        value: cuda
+        scope: cli
+
+      - name: compute_type
+        type: string
+        value: float16
+
+  # ---- Language model ----
+  - name: llm
+    type: group
+    description: OpenAI-compatible llama.cpp Chat Completions backend
+    parameters:
+      - name: backend
+        type: string
+        value: chat-completions
+        scope: cli
+
+      - name: model_name
+        type: string
+        value: gemma-4-12b-it-Q8_0.gguf
+        scope: cli
+
+      - name: base_url
+        type: string
+        value: http://127.0.0.1:8080/v1
+        scope: cli
+
+      - name: api_key
+        type: string
+        value: none
+        scope: cli
+
+      - name: stream
+        type: bool
+        value: true
+
+      - name: disable_thinking
+        type: bool
+        value: true
+
+      - name: user_role
+        type: string
+        value: user
+
+      - name: init_chat_prompt
+        type: string
+        value: "You are a helpful, friendly voice assistant. Reply naturally and concisely."
+        scope: cli
+
+      - name: chat_size
+        type: int
+        value: 30
+
+      - name: stream_batch_sentences
+        type: int
+        value: 3
+
+      - name: enable_lang_prompt
+        type: bool
+        value: false
+
+      - name: compact_history
+        type: bool
+        value: true
+
+  # ---- Speech synthesis ----
+  - name: tts
+    type: group
+    description: Qwen3-TTS backend
+    parameters:
+      - name: backend
+        type: string
+        value: qwen3
+        scope: cli
+
+      - name: model_name
+        type: string
+        value: Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+        scope: cli
+
+      - name: backend_engine
+        type: string
+        value: torch
+        description: "Qwen inference backend: torch or ggml"
+        scope: cli
+
+      - name: device
+        type: string
+        value: cuda
+        scope: cli
+
+      - name: dtype
+        type: string
+        value: auto
+
+      - name: attn_implementation
+        type: string
+        value: eager
+
+      - name: speaker
+        type: string
+        value: Ono_Anna
+        scope: cli
+
+      - name: language
+        type: string
+        value: auto
+
+      - name: parity_mode
+        type: bool
+        value: false
+
+      - name: non_streaming_mode
+        type: bool
+        value: true
+
+      - name: max_new_tokens
+        type: int
+        value: 1536
+
+      - name: blocksize
+        type: int
+        value: 512
+
+  # ---- MAGPIE communication and discovery ----
+  - name: zmq
+    type: group
+    description: MAGPIE ZMQ endpoints derived from one base port
+    parameters:
+      - name: node_id
+        type: string
+        value: luxai-s2s-magpie
+        description: Node ID advertised through Zeroconf discovery
+
+      - name: port
+        type: int
+        value: 50960
+        description: >
+          Base ZMQ port: +0 RPC/system descriptor, +1 audio IN,
+          +2 audio OUT, +3 events IN, +4 events OUT.
+        scope: cli
+
+      - name: audio_input_queue_size
+        type: int
+        value: 256
+
+      - name: audio_output_queue_size
+        type: int
+        value: 0
+        description: Direct output writes preserve PCM ordering
+
+      - name: event_input_queue_size
+        type: int
+        value: 4096
+
+      - name: event_output_queue_size
+        type: int
+        value: 0
+        description: Direct output writes preserve lifecycle-event ordering
