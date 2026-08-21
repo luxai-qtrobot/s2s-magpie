@@ -258,10 +258,6 @@ parameters:
         value: Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
         scope: cli
 
-      - name: model_revision
-        type: string
-        value: "85e237c12c027371202489a0ec509ded67b5e4b5"
-
       - name: cache_dir
         type: string
         value: ""
@@ -292,6 +288,25 @@ parameters:
       - name: speaker
         type: string
         value: Ono_Anna
+        description: Preset speaker for CustomVoice models
+        scope: cli
+
+      - name: ref_audio
+        type: string
+        value: ""
+        description: Server-local reference audio for Base voice cloning
+        scope: cli
+
+      - name: ref_text
+        type: string
+        value: ""
+        description: Exact reference transcript; unused in xvec-only mode
+        scope: cli
+
+      - name: xvec_only
+        type: bool
+        value: false
+        description: Clone only the speaker identity for faster multilingual synthesis
         scope: cli
 
       - name: language
