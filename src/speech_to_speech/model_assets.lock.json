@@ -18,6 +18,11 @@
     "qwen3_tts_0_6b_custom_voice": {
       "repo_id": "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
       "revision": "85e237c12c027371202489a0ec509ded67b5e4b5"
+    },
+    "qwen3_tts_0_6b_base": {
+      "repo_id": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+      "revision": "5d83992436eae1d760afd27aff78a71d676296fc",
+      "optional": true
     }
   },
   "nltk": {

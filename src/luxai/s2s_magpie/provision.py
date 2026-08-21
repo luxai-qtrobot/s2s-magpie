@@ -81,11 +81,19 @@ def provision_nltk_asset(name: str, asset: dict[str, Any], nltk_data: Path, *, v
     print(f"provisioned nltk:{name} -> {resource_dir}")
 
 
-def provision_huggingface(lock: dict[str, Any], cache_dir: Path | None, *, verify_only: bool) -> None:
+def provision_huggingface(
+    lock: dict[str, Any],
+    cache_dir: Path | None,
+    *,
+    verify_only: bool,
+    include_optional: bool = False,
+) -> None:
     from huggingface_hub import hf_hub_download, snapshot_download
 
     cache_value = str(cache_dir) if cache_dir else None
     for name, asset in lock["huggingface"].items():
+        if asset.get("optional", False) and not include_optional:
+            continue
         common = {
             "repo_id": str(asset["repo_id"]),
             "revision": str(asset["revision"]),
@@ -114,6 +122,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--verify-only", action="store_true", help="Forbid downloads and verify the local caches")
     parser.add_argument(
+        "--include-optional",
+        action="store_true",
+        help="Also provision optional models such as Qwen3-TTS Base",
+    )
+    parser.add_argument(
         "--skip-package-check",
         action="store_true",
         help="Skip exact model-loader package version validation",
@@ -129,7 +142,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     nltk_data = args.nltk_data.expanduser().resolve()
     if not args.skip_package_check:
         validate_package_versions(lock)
-    provision_huggingface(lock, hf_cache, verify_only=args.verify_only)
+    provision_huggingface(
+        lock,
+        hf_cache,
+        verify_only=args.verify_only,
+        include_optional=args.include_optional,
+    )
     for name, asset in lock["nltk"].items():
         provision_nltk_asset(name, asset, nltk_data, verify_only=args.verify_only)
 

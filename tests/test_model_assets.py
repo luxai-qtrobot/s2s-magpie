@@ -4,7 +4,11 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-from speech_to_speech.model_assets import load_asset_lock, resolve_huggingface_file
+from speech_to_speech.model_assets import (
+    load_asset_lock,
+    locked_revision_for_repo,
+    resolve_huggingface_file,
+)
 
 
 def test_production_assets_have_immutable_revisions() -> None:
@@ -13,6 +17,14 @@ def test_production_assets_have_immutable_revisions() -> None:
 
     assert all(len(revision) == 40 for revision in revisions)
     assert set(lock["nltk"]) == {"punkt_tab"}
+
+
+def test_optional_qwen_base_model_has_a_locked_revision() -> None:
+    lock = load_asset_lock()
+    asset = lock["huggingface"]["qwen3_tts_0_6b_base"]
+
+    assert asset["optional"] is True
+    assert locked_revision_for_repo(asset["repo_id"]) == asset["revision"]
 
 
 def test_huggingface_resolution_is_pinned_and_offline(monkeypatch, tmp_path) -> None:

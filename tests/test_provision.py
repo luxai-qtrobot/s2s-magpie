@@ -29,7 +29,9 @@ def test_main_preserves_provisioning_options(monkeypatch, tmp_path, capsys) -> N
     monkeypatch.setattr(
         provision,
         "provision_huggingface",
-        lambda value, cache, *, verify_only: calls.append(("hf", value, cache, verify_only)),
+        lambda value, cache, *, verify_only, include_optional: calls.append(
+            ("hf", value, cache, verify_only, include_optional)
+        ),
     )
     monkeypatch.setattr(
         provision,
@@ -50,7 +52,7 @@ def test_main_preserves_provisioning_options(monkeypatch, tmp_path, capsys) -> N
     assert result == 0
     assert calls == [
         ("packages", lock),
-        ("hf", lock, hf_cache.resolve(), True),
+        ("hf", lock, hf_cache.resolve(), True, False),
         ("nltk", "punkt_tab", lock["nltk"]["punkt_tab"], nltk_data.resolve(), True),
     ]
     output = capsys.readouterr().out
@@ -77,3 +79,26 @@ def test_main_can_skip_package_validation(monkeypatch, tmp_path) -> None:
     )
 
     assert result == 0
+
+
+def test_main_can_include_optional_models(monkeypatch, tmp_path) -> None:
+    lock = {"python_packages": {}, "huggingface": {}, "nltk": {}}
+    calls: list[bool] = []
+    monkeypatch.setattr(provision, "load_lock", lambda: lock)
+    monkeypatch.setattr(provision, "validate_package_versions", lambda _lock: None)
+    monkeypatch.setattr(
+        provision,
+        "provision_huggingface",
+        lambda _lock, _cache, *, verify_only, include_optional: calls.append(include_optional),
+    )
+
+    result = provision.main(
+        [
+            "--nltk-data",
+            str(tmp_path),
+            "--include-optional",
+        ]
+    )
+
+    assert result == 0
+    assert calls == [True]
