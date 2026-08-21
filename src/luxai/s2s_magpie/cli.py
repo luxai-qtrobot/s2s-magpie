@@ -62,8 +62,19 @@ def _load_parameters() -> tuple[Path, Any]:
         Path(sys.argv[1]).expanduser()
         if len(sys.argv) > 1 and not sys.argv[1].startswith("-")
         else _default_config_path()
-    )
-    return config_path, Paramify(str(config_path)).parameters
+    ).resolve()
+    parameters = Paramify(str(config_path)).parameters
+
+    ref_audio_value = str(getattr(parameters.tts, "ref_audio", "") or "").strip()
+    ref_audio = Path(ref_audio_value).expanduser()
+    if ref_audio_value and not ref_audio.is_absolute():
+        for base in (config_path.parent, config_path.parent.parent):
+            candidate = (base / ref_audio).resolve()
+            if candidate.is_file():
+                parameters.tts.ref_audio = str(candidate)
+                break
+
+    return config_path, parameters
 
 
 def _prepare_pipeline(parameters: Any) -> ParsedArguments:

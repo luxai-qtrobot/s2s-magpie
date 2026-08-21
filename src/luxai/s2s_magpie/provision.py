@@ -124,7 +124,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--include-optional",
         action="store_true",
-        help="Also provision optional models such as Qwen3-TTS Base",
+        help="Also provision optional alternative models",
     )
     parser.add_argument(
         "--skip-package-check",

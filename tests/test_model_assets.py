@@ -19,12 +19,15 @@ def test_production_assets_have_immutable_revisions() -> None:
     assert set(lock["nltk"]) == {"punkt_tab"}
 
 
-def test_optional_qwen_base_model_has_a_locked_revision() -> None:
+def test_default_and_optional_qwen_models_have_locked_revisions() -> None:
     lock = load_asset_lock()
-    asset = lock["huggingface"]["qwen3_tts_0_6b_base"]
+    base = lock["huggingface"]["qwen3_tts_0_6b_base"]
+    custom_voice = lock["huggingface"]["qwen3_tts_0_6b_custom_voice"]
 
-    assert asset["optional"] is True
-    assert locked_revision_for_repo(asset["repo_id"]) == asset["revision"]
+    assert base.get("optional", False) is False
+    assert custom_voice["optional"] is True
+    assert locked_revision_for_repo(base["repo_id"]) == base["revision"]
+    assert locked_revision_for_repo(custom_voice["repo_id"]) == custom_voice["revision"]
 
 
 def test_huggingface_resolution_is_pinned_and_offline(monkeypatch, tmp_path) -> None:

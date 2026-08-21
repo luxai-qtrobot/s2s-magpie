@@ -91,6 +91,7 @@ speech_to_speech = ["TTS/*.wav", "model_assets.lock.json"]
 
 [tool.setuptools.data-files]
 "share/luxai-s2s-magpie/config" = ["config/config.yaml"]
+"share/luxai-s2s-magpie/voices" = ["voices/*.wav", "voices/*.txt"]
 
 [tool.ruff]
 src = ["src"]

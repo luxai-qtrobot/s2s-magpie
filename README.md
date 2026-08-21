@@ -141,8 +141,10 @@ explicit local talker and codec GGUF paths.
 [`config/config.yaml`](config/config.yaml) is the single Paramify schema for
 both the native S2S modules (VAD, STT, LLM, and TTS) and the MAGPIE service.
 The included defaults match the tested Jetson setup: CUDA Parakeet TDT,
-llama.cpp Chat Completions, and the Torch Qwen3-TTS 0.6B CustomVoice model
-with `Ono_Anna`.
+llama.cpp Chat Completions, and the Torch Qwen3-TTS 0.6B Base model using the
+included `voices/rosie.wav` reference in fast x-vector-only mode.
+Clients can select another bundled reference by name, such as `aiden`, or use
+an absolute path to a server-local WAV file.
 
 Run with those defaults, or pass a different Paramify file as the first
 argument:
@@ -153,7 +155,7 @@ luxai-s2s-magpie /path/to/config.yaml
 ```
 
 Paramify also exposes the configured CLI-scoped values, for example
-`--zmq-port`, `--llm-model-name`, and `--tts-speaker`. There is no second S2S
+`--zmq-port`, `--llm-model-name`, and `--tts-ref-audio`. There is no second S2S
 argument parser: Paramify values are adapted directly into S2S's native
 backend dataclasses. Fields omitted by the bundled schema keep their upstream
 dataclass defaults. The bundled schema covers the tested Parakeet TDT,

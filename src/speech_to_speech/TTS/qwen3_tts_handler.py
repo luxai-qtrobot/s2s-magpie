@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import sys
 import tempfile
 import unicodedata
 from collections.abc import Callable
@@ -456,6 +457,29 @@ class Qwen3TTSHandler(BaseHandler[TTSIn, TTSOut]):
 
         return None
 
+    def _resolve_session_voice_path(self, voice: str) -> Path | None:
+        candidate = Path(voice).expanduser()
+        if candidate.is_absolute():
+            return candidate.resolve() if candidate.suffix.lower() == ".wav" and candidate.is_file() else None
+
+        if len(candidate.parts) != 1 or candidate.name in ("", ".", ".."):
+            return None
+        if candidate.suffix and candidate.suffix.lower() != ".wav":
+            return None
+
+        voice_name = candidate.stem if candidate.suffix else candidate.name
+        filename = f"{voice_name.casefold()}.wav"
+        voice_dirs = (
+            Path.cwd() / "voices",
+            Path(sys.prefix) / "share" / "luxai-s2s-magpie" / "voices",
+            Path(__file__).resolve().parents[3] / "voices",
+        )
+        for voice_dir in voice_dirs:
+            voice_path = voice_dir / filename
+            if voice_path.is_file():
+                return voice_path.resolve()
+        return None
+
     def _has_voice_clone_reference(self) -> bool:
         return bool(self.ref_audio or getattr(self, "ref_spk", None))
 
@@ -560,13 +584,16 @@ class Qwen3TTSHandler(BaseHandler[TTSIn, TTSOut]):
             self._clear_cached_voice_reference()
             return
 
-        if self._resolve_audio_path(session_voice) is not None:
-            self.ref_audio = session_voice
+        resolved_voice = self._resolve_session_voice_path(session_voice)
+        if resolved_voice is not None:
+            self.ref_audio = str(resolved_voice)
             self._clear_cached_voice_reference()
             return
 
         logger.warning(
-            "Ignoring Qwen3-TTS session voice override because it is not an audio file path: %r",
+            "Rejecting unknown Qwen3-TTS voice %r; the current voice remains active. "
+            "Use a bundled voice name such as 'rosie', or an absolute path to "
+            "a server-local WAV file.",
             session_voice,
         )
 

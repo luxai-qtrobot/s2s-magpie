@@ -72,6 +72,7 @@ mkdir -p \
     "$INSTALL_STAGING/bin" \
     "$INSTALL_STAGING/config" \
     "$INSTALL_STAGING/packages" \
+    "$INSTALL_STAGING/voices" \
     "$STAGING/lib/systemd/system" \
     "$STAGING/DEBIAN" \
     "$DIST_DIR"
@@ -88,10 +89,12 @@ echo "--- Copying package payload ---"
 cp "$WHEEL_PATH" "$INSTALL_STAGING/packages/"
 cp "$PROJECT_DIR/requirements-jetson.lock.txt" "$INSTALL_STAGING/packages/"
 cp "$PROJECT_DIR/config/config.yaml" "$INSTALL_STAGING/config/"
+cp -a "$PROJECT_DIR/voices/." "$INSTALL_STAGING/voices/"
 chmod 644 \
     "$INSTALL_STAGING/packages/$(basename "$WHEEL_PATH")" \
     "$INSTALL_STAGING/packages/requirements-jetson.lock.txt" \
     "$INSTALL_STAGING/config/config.yaml"
+find "$INSTALL_STAGING/voices" -type f -exec chmod 644 {} +
 
 UV_PATH="$(command -v uv)"
 cp -L "$UV_PATH" "$INSTALL_STAGING/bin/uv"
