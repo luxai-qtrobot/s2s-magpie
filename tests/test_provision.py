@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import ModuleType
+
 from luxai.s2s_magpie import provision
 
 
@@ -102,3 +105,33 @@ def test_main_can_include_optional_models(monkeypatch, tmp_path) -> None:
 
     assert result == 0
     assert calls == [True]
+
+
+def test_optional_models_are_provisioned_only_when_requested(monkeypatch) -> None:
+    calls: list[str] = []
+    fake_hub = ModuleType("huggingface_hub")
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(kwargs["repo_id"])
+        return f"/cache/{kwargs['repo_id']}"
+
+    fake_hub.snapshot_download = fake_snapshot_download
+    fake_hub.hf_hub_download = lambda **_kwargs: "unused"
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake_hub)
+    lock = {
+        "huggingface": {
+            "required": {"repo_id": "example/required", "revision": "a" * 40},
+            "optional": {
+                "repo_id": "example/optional",
+                "revision": "b" * 40,
+                "optional": True,
+            },
+        }
+    }
+
+    provision.provision_huggingface(lock, None, verify_only=True)
+    assert calls == ["example/required"]
+
+    calls.clear()
+    provision.provision_huggingface(lock, None, verify_only=True, include_optional=True)
+    assert calls == ["example/required", "example/optional"]
