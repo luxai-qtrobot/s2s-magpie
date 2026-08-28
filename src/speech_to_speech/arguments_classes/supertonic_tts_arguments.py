@@ -15,6 +15,10 @@ class SupertonicTTSHandlerArguments:
         default=1.0,
         metadata={"help": "Speed modifier for Supertonic TTS (0.7 to 2.0). Default is 1.0."},
     )
+    supertonic_tts_total_steps: int = field(
+        default=2,
+        metadata={"help": "Number of Supertonic denoising steps. Default is 2."},
+    )
     supertonic_tts_blocksize: int = field(
         default=512,
         metadata={"help": "Audio output block size in samples. Default is 512."},

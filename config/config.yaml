@@ -325,6 +325,12 @@ parameters:
         type: int
         value: 1536
 
+      - name: total_steps
+        type: int
+        value: 2
+        description: Supertonic denoising steps
+        scope: cli
+
       - name: blocksize
         type: int
         value: 512

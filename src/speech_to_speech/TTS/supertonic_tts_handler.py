@@ -64,6 +64,7 @@ class SupertonicTTSHandler(BaseHandler[TTSIn, TTSOut]):
         voice: str = "M1",
         lang: str = "na",
         speed: float = 1.0,
+        total_steps: int = 2,
         blocksize: int = 512,
         cancel_scope: CancelScope | None = None,
         speculative_turns: SpeculativeTurnTracker | None = None,
@@ -71,6 +72,8 @@ class SupertonicTTSHandler(BaseHandler[TTSIn, TTSOut]):
     ) -> None:
         if blocksize <= 0:
             raise ValueError(f"blocksize must be positive, got {blocksize}")
+        if not 1 <= total_steps <= 100:
+            raise ValueError(f"total_steps must be between 1 and 100, got {total_steps}")
 
         normalized_lang = self._normalize_language_code(lang)
         if normalized_lang not in SUPERTONIC_LANGUAGE_CODES:
@@ -83,6 +86,7 @@ class SupertonicTTSHandler(BaseHandler[TTSIn, TTSOut]):
         self.voice = voice
         self.lang = normalized_lang
         self.speed = speed
+        self.total_steps = total_steps
         self.blocksize = blocksize
         self.cancel_scope = cancel_scope
         self.speculative_turns = speculative_turns
@@ -108,6 +112,7 @@ class SupertonicTTSHandler(BaseHandler[TTSIn, TTSOut]):
             lang=self.lang,
             voice_style=self.voice_style,
             speed=self.speed,
+            total_steps=self.total_steps,
         )
 
     @staticmethod
@@ -173,6 +178,7 @@ class SupertonicTTSHandler(BaseHandler[TTSIn, TTSOut]):
             lang=lang,
             voice_style=self.voice_style,
             speed=self.speed,
+            total_steps=self.total_steps,
         )
 
         if self._is_cancelled(cancel_gen):
