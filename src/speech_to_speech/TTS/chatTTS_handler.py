@@ -99,7 +99,7 @@ class ChatTTSHandler(BaseHandler[TTSIn, TTSOut]):
                 if gen[0] is None or len(gen[0]) == 0:
                     return
                 audio_chunk = librosa.resample(gen[0], orig_sr=24000, target_sr=16000)
-                audio_chunk = (audio_chunk * 32768).astype(np.int16)[0]
+                audio_chunk = (audio_chunk * 32768).astype(np.int16)
                 while len(audio_chunk) > self.chunk_size:
                     yield audio_chunk[: self.chunk_size]  # Return the first chunk_size samples of the audio data
                     audio_chunk = audio_chunk[self.chunk_size :]  # Remove the samples that have already been returned
