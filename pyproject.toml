@@ -38,6 +38,7 @@ dependencies = [
     "requests>=2.31.0",
     "rich>=13.0",
     "scipy>=1.10.0",
+    "soxr>=1.0.0",
     "soundfile>=0.12.0",
     "torch>=2.4.0",
     "torchaudio>=2.4.0",
