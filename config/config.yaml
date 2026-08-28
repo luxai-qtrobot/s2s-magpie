@@ -233,7 +233,7 @@ parameters:
 
       - name: stream_batch_sentences
         type: int
-        value: 3
+        value: 1
 
       - name: enable_lang_prompt
         type: bool
@@ -246,11 +246,23 @@ parameters:
   # ---- Speech synthesis ----
   - name: tts
     type: group
-    description: Qwen3-TTS backend
+    description: Speech synthesis backend
     parameters:
       - name: backend
         type: string
-        value: qwen3
+        value: supertonic
+        scope: cli
+
+      - name: voice
+        type: string
+        value: F2
+        description: Supertonic voice style
+        scope: cli
+
+      - name: speed
+        type: double
+        value: 0.7
+        description: Supertonic speech speed
         scope: cli
 
       - name: model_name
@@ -327,7 +339,7 @@ parameters:
 
       - name: total_steps
         type: int
-        value: 2
+        value: 8
         description: Supertonic denoising steps
         scope: cli
 
