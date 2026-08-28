@@ -68,6 +68,7 @@ paraformer = [
     "onnxruntime<1.24; python_version < '3.11'",
 ]
 pocket = ["pocket-tts>=0.1.0"]
+supertonic = ["supertonic>=1.3.1"]
 whisper-mlx = [
     "lightning-whisper-mlx>=0.0.10; platform_system == 'Darwin'",
 ]
