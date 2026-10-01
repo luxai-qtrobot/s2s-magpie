@@ -100,6 +100,7 @@ class MagpieSessionHost:
             audio_queue_size=self._audio_output_queue_size,
             event_queue_size=self._event_output_queue_size,
         )
+
         self._audio_reader = StrictZmqStreamReader(
             bind_endpoint(self._base_port, AUDIO_INPUT_PORT_OFFSET),
             topic=AUDIO_INPUT_TOPIC,
@@ -113,6 +114,19 @@ class MagpieSessionHost:
             queue_size=self._event_input_queue_size,
             bind=True,
             delivery="reliable",
+        )
+
+    def set_node_id(self, node_id: str) -> None:
+        """Update the advertised node ID and matching RPC descriptor."""
+
+        self._node_id = node_id
+        self._descriptor = build_system_descriptor(
+            self._node_id,
+            self._base_port,
+            audio_input_queue_size=self._audio_input_queue_size,
+            audio_output_queue_size=self._audio_output_queue_size,
+            event_input_queue_size=self._event_input_queue_size,
+            event_output_queue_size=self._event_output_queue_size,
         )
 
     async def start(self) -> None:

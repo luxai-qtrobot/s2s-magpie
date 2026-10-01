@@ -6,12 +6,14 @@ import asyncio
 import signal
 import sys
 from pathlib import Path
+from socket import gethostname
 from threading import Event
 from typing import Any
 
 from luxai.magpie.discovery import ZconfDiscovery
 from luxai.magpie.utils import Logger
 from paramify import Paramify
+from zeroconf import NonUniqueNameException
 
 from speech_to_speech.s2s_pipeline import (
     ParsedArguments,
@@ -95,11 +97,23 @@ def _advertise_discovery(parameters: Any) -> ZconfDiscovery:
 
     discovery = ZconfDiscovery()
     try:
-        discovery.advertise_node(
-            str(parameters.zmq.node_id),
-            port=int(parameters.zmq.port),
-            payload={"version": str(parameters.service_version)},
-        )
+        try:
+            discovery.advertise_node(
+                str(parameters.zmq.node_id),
+                port=int(parameters.zmq.port),
+                payload={"version": str(parameters.service_version)},
+            )
+        except NonUniqueNameException:
+            node_id = f"{parameters.zmq.node_id}-{gethostname()}"
+            Logger.warning(
+                f"MAGPIE node ID is already in use; advertising as {node_id}"
+            )
+            parameters.zmq.node_id = node_id
+            discovery.advertise_node(
+                node_id,
+                port=int(parameters.zmq.port),
+                payload={"version": str(parameters.service_version)},
+            )
     except BaseException:
         discovery.close()
         raise
@@ -152,6 +166,7 @@ async def _serve(
         # Zeroconf's synchronous API raises EventLoopBlocked when invoked from
         # the asyncio loop that it needs to coordinate with internally.
         discovery = await asyncio.to_thread(_advertise_discovery, parameters)
+        host.set_node_id(str(parameters.zmq.node_id))
 
         base_port = int(parameters.zmq.port)
         Logger.info(

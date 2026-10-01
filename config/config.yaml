@@ -60,7 +60,7 @@ parameters:
 
       - name: min_silence_ms
         type: int
-        value: 64
+        value: 150
 
       - name: min_speech_ms
         type: int
@@ -68,7 +68,7 @@ parameters:
 
       - name: min_speech_continuation_ms
         type: int
-        value: 192
+        value: 250
 
       - name: max_speech_ms
         type: double
@@ -90,11 +90,11 @@ parameters:
 
       - name: speculative_reopen_ms
         type: int
-        value: 800
+        value: 400
 
       - name: unanswered_reopen_ms
         type: int
-        value: 7000
+        value: 2000
 
       - name: short_segment_merge_ms
         type: int
@@ -123,15 +123,15 @@ parameters:
 
       - name: smart_turn_threshold
         type: double
-        value: 0.5
+        value: 0.4
 
       - name: smart_turn_max_wait_ms
         type: int
-        value: 2000
+        value: 1000
 
       - name: smart_turn_incomplete_delay_ms
         type: int
-        value: 600
+        value: 250
 
       - name: smart_turn_cpu_count
         type: int
@@ -250,7 +250,7 @@ parameters:
     parameters:
       - name: backend
         type: string
-        value: supertonic
+        value: qwen3
         scope: cli
 
       - name: voice
@@ -336,6 +336,12 @@ parameters:
       - name: max_new_tokens
         type: int
         value: 1536
+
+      - name: streaming_chunk_size
+        type: int
+        value: 8
+        description: Qwen streaming codec steps per chunk
+        scope: cli
 
       - name: total_steps
         type: int
