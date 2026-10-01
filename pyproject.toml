@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "luxai-s2s-magpie"
-version = "0.1.0"
+version = "0.1.1"
 description = "LuxAI MAGPIE-native speech-to-speech runtime"
 readme = "README.md"
 requires-python = ">=3.10"
